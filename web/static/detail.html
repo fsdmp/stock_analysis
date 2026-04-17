@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股K线分析</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; overflow: hidden; }
+.top-bar {
+  background: #16213e; border-bottom: 1px solid #0f3460;
+  padding: 6px 20px;
+}
+.top-row {
+  display: flex; align-items: center; gap: 14px;
+}
+.top-row h1 { font-size: 16px; color: #e94560; white-space: nowrap; }
+.search-box { position: relative; flex-shrink: 0; }
+.search-box input {
+  width: 180px; padding: 4px 10px; background: #0f3460; border: 1px solid #2a2a4a;
+  border-radius: 4px; color: #fff; font-size: 13px; outline: none;
+}
+.search-box input:focus { border-color: #e94560; }
+.dropdown {
+  position: absolute; top: calc(100% + 2px); left: 0; width: 260px; max-height: 260px;
+  overflow-y: auto; background: #16213e; border: 1px solid #2a2a4a;
+  border-radius: 4px; z-index: 100; display: none; box-shadow: 0 4px 12px rgba(0,0,0,.4);
+}
+.dropdown.show { display: block; }
+.dropdown-item { padding: 5px 12px; cursor: pointer; font-size: 13px; display: flex; justify-content: space-between; }
+.dropdown-item:hover { background: #0f3460; }
+.price-area { display: flex; align-items: baseline; gap: 8px; }
+.price-area .price { font-size: 20px; font-weight: 600; }
+.price-area .chg { font-size: 13px; }
+.up { color: #e74c3c; }
+.down { color: #2ecc71; }
+.info-grid {
+  display: flex; flex-wrap: wrap; gap: 4px 0;
+  margin-top: 4px; font-size: 12px; line-height: 1.8;
+}
+.info-grid .g { display: flex; align-items: center; gap: 3px; margin-right: 12px; }
+.info-grid .l { color: #555; font-size: 11px; }
+.info-grid .v { color: #bbb; }
+.info-grid .sep {
+  width: 1px; height: 14px; background: #2a2a4a; margin: 0 8px; align-self: center;
+}
+#chart { width: 100%; height: calc(100vh - 68px); }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="top-row">
+    <h1><a href="/" style="color:#e94560;text-decoration:none">A股K线</a></h1>
+    <div class="search-box">
+      <input id="searchInput" type="text" placeholder="股票代码..." autocomplete="off">
+      <div class="dropdown" id="dropdown"></div>
+    </div>
+    <div class="price-area" id="priceArea"></div>
+  </div>
+  <div class="info-grid" id="infoGrid"></div>
+</div>
+
+<div id="chart"></div>
+
+<script>
+const chart = echarts.init(document.getElementById('chart'), 'dark');
+const UP = '#e74c3c', DN = '#2ecc71';
+const MA_C = ['#f1c40f','#e67e22','#9b59b6','#3498db'];
+
+let currentCode = '', rawData = null;
+const searchInput = document.getElementById('searchInput');
+const dropdown = document.getElementById('dropdown');
+let searchTimer;
+
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => doSearch(searchInput.value.trim()), 300);
+});
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const v = searchInput.value.trim();
+    if (v && /^\d+$/.test(v)) { loadStock(v); dropdown.classList.remove('show'); }
+  }
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-box')) dropdown.classList.remove('show');
+});
+
+async function doSearch(q) {
+  if (!q) { dropdown.classList.remove('show'); return; }
+  const resp = await fetch(`/api/stocks?q=${q}`);
+  const stocks = await resp.json();
+  if (!stocks.length) { dropdown.classList.remove('show'); return; }
+  dropdown.innerHTML = stocks.map(s => {
+    const cls = s.pct_change >= 0 ? 'up' : 'down';
+    const sign = s.pct_change >= 0 ? '+' : '';
+    return `<div class="dropdown-item" onclick="loadStock('${s.code}')">
+      <span>${s.code}</span><span class="${cls}">${s.close} ${sign}${s.pct_change}%</span>
+    </div>`;
+  }).join('');
+  dropdown.classList.add('show');
+}
+
+const C = {date:0,open:1,close:2,high:3,low:4,vol:5,pct:6,ma5:7,ma7:8,ma10:9,ma20:10,dif:11,dea:12,hist:13,k:14,d:15,j:16};
+function R(rows,i) {
+  const r=rows[i];
+  return {date:r[C.date],open:r[C.open],close:r[C.close],high:r[C.high],low:r[C.low],
+    vol:r[C.vol],pct:r[C.pct],ma5:r[C.ma5],ma7:r[C.ma7],ma10:r[C.ma10],ma20:r[C.ma20],
+    dif:r[C.dif],dea:r[C.dea],hist:r[C.hist],k:r[C.k],d:r[C.d],j:r[C.j]};
+}
+
+async function loadStock(code) {
+  code = code.padStart(6,'0');
+  currentCode = code;
+  searchInput.value = code;
+  // Update URL so refresh keeps current stock
+  window.history.replaceState(null, '', `/stock/${code}`);
+  dropdown.classList.remove('show');
+  const resp = await fetch(`/api/stock/${code}`);
+  rawData = await resp.json();
+  if (rawData.error) { alert(rawData.error); return; }
+  renderChart();
+  renderInfo();
+}
+
+function fmtVol(v) {
+  if (!v) return '-';
+  if (v >= 1e8) return (v/1e8).toFixed(1)+'亿';
+  if (v >= 1e4) return (v/1e4).toFixed(0)+'万';
+  return v.toString();
+}
+
+function renderInfo() {
+  const rows = rawData.data;
+  const i = rows.length - 1;
+  const d = R(rows, i);
+  const prev = i > 0 ? R(rows, i - 1) : d;
+  const pct = d.pct || ((d.close-prev.close)/prev.close*100);
+  const cls = pct >= 0 ? 'up' : 'down';
+  const s = pct >= 0 ? '+' : '';
+  const chg = (d.close - prev.close).toFixed(2);
+
+  document.getElementById('priceArea').innerHTML =
+    `<span class="price ${cls}">${d.close.toFixed(2)}</span>` +
+    `<span class="chg ${cls}">${s}${chg} (${s}${pct.toFixed(2)}%)</span>`;
+
+  const g = (l, v, c) => `<span class="g"><span class="l">${l}</span><span class="v" ${c?'style="color:'+c+'"':''}>${v}</span></span>`;
+  const sep = '<span class="sep"></span>';
+  document.getElementById('infoGrid').innerHTML =
+    g('开', d.open.toFixed(2)) + g('高', d.high.toFixed(2)) + g('低', d.low.toFixed(2)) + g('量', fmtVol(d.vol)) + sep +
+    g('MA5', d.ma5?.toFixed(2)||'-', MA_C[0]) + g('MA10', d.ma10?.toFixed(2)||'-', MA_C[2]) + g('MA20', d.ma20?.toFixed(2)||'-', MA_C[3]) + sep +
+    g('DIF', d.dif?.toFixed(3)||'-','#f1c40f') + g('DEA', d.dea?.toFixed(3)||'-','#3498db') + g('MACD', d.hist?.toFixed(3)||'-') + sep +
+    g('K', d.k?.toFixed(3)||'-','#f1c40f') + g('D', d.d?.toFixed(3)||'-','#3498db') + g('J', d.j?.toFixed(3)||'-','#e74c3c');
+}
+
+function renderChart() {
+  const rows = rawData.data, len = rows.length;
+  const dates=[], ohlc=[], vols=[], ma5=[],ma7=[],ma10=[],ma20=[];
+  const dif=[],dea=[],hist=[], kdjK=[],kdjD=[],kdjJ=[];
+
+  for (let i=0; i<len; i++) {
+    const d = R(rows,i);
+    dates[i]=d.date;
+    ohlc[i]=[d.open,d.close,d.low,d.high];
+    vols[i]={value:d.vol||0, itemStyle:{color:d.close>=d.open?UP:DN,opacity:.6}};
+    ma5[i]=d.ma5; ma7[i]=d.ma7; ma10[i]=d.ma10; ma20[i]=d.ma20;
+    dif[i]=d.dif; dea[i]=d.dea;
+    hist[i]={value:d.hist, itemStyle:{color:d.hist>=0?UP:DN}};
+    kdjK[i]=d.k; kdjD[i]=d.d; kdjJ[i]=d.j;
+  }
+
+  const mkX = (gi, showLabel) => ({
+    type:'category', data:dates, gridIndex:gi, boundaryGap:true,
+    axisLine:{lineStyle:{color:'#2a2a3a'}}, axisTick:{show:false},
+    axisLabel: showLabel ? {color:'#555',fontSize:10} : {show:false}
+  });
+  const mkY = (gi, fmt) => ({
+    scale:true, gridIndex:gi, splitLine:{lineStyle:{color:'#1e1e30'}},
+    axisLabel:{color:'#555',fontSize:10, formatter:fmt}
+  });
+
+  chart.setOption({
+    backgroundColor:'#1a1a2e',
+    animation:false,
+    axisPointer:{link:[{xAxisIndex:'all'}]},
+    title:[
+      {text:'K线', left:70, top:8, textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
+      {text:'MA5', left:110, top:8, textStyle:{color:'#f1c40f',fontSize:11,fontWeight:'normal'}},
+      {text:'MA10', left:148, top:8, textStyle:{color:'#9b59b6',fontSize:11,fontWeight:'normal'}},
+      {text:'MA20', left:196, top:8, textStyle:{color:'#3498db',fontSize:11,fontWeight:'normal'}},
+      {text:`VOL  ${fmtVol(R(rows,rows.length-1).vol)}`, left:70, top:'49.5%', textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
+      {text:'MACD (12,26,9)', left:70, top:'63.5%', textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
+      {text:'KDJ (9,3,3)', left:70, top:'81.5%', textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
+    ],
+    tooltip:{
+      trigger:'axis',
+      axisPointer:{type:'line', lineStyle:{color:'#555',type:'dashed',width:1}},
+      backgroundColor:'rgba(22,33,62,.95)', borderWidth:1, borderColor:'#2a2a4a',
+      padding:[8,12],
+      textStyle:{color:'#e0e0e0',fontSize:12},
+      formatter:function(p){
+        if(!p||!p.length) return '';
+        const d = R(rows, p[0].dataIndex);
+        const pct = d.pct||0;
+        const c = pct>=0?'#e74c3c':'#2ecc71';
+        const lb='color:#555;font-size:11px;padding-right:4px;white-space:nowrap';
+        const vl=(vc)=>`color:${vc||'#bbb'};white-space:nowrap`;
+        return `<table style="font-size:12px;line-height:1.7;border-spacing:0">
+          <tr><td colspan="6" style="padding-bottom:3px;border-bottom:1px solid #2a2a4a"><b>${d.date}</b></td></tr>
+          <tr>
+            <td style="${lb}">开</td><td style="${vl()}">${d.open.toFixed(2)}</td>
+            <td style="${lb};padding-left:10px">高</td><td style="${vl()}">${d.high.toFixed(2)}</td>
+            <td style="${lb};padding-left:10px">低</td><td style="${vl()}">${d.low.toFixed(2)}</td>
+          </tr>
+          <tr>
+            <td style="${lb}">收</td><td style="${vl(c)}">${d.close.toFixed(2)}</td>
+            <td style="${lb};padding-left:10px">量</td><td style="${vl()}">${fmtVol(d.vol)}</td>
+            <td style="${lb};padding-left:10px">幅</td><td style="${vl(c)}">${pct>=0?'+':''}${pct.toFixed(2)}%</td>
+          </tr>
+          <tr><td colspan="6" style="padding-top:2px;border-top:1px solid #2a2a4a"></td></tr>
+          <tr>
+            <td style="${lb}">MA5</td><td style="${vl('#f1c40f')}">${d.ma5?.toFixed(2)||'-'}</td>
+            <td style="${lb};padding-left:10px">MA10</td><td style="${vl('#9b59b6')}">${d.ma10?.toFixed(2)||'-'}</td>
+            <td style="${lb};padding-left:10px">MA20</td><td style="${vl('#3498db')}">${d.ma20?.toFixed(2)||'-'}</td>
+          </tr>
+          <tr>
+            <td style="${lb}">DIF</td><td style="${vl('#f1c40f')}">${d.dif?.toFixed(3)||'-'}</td>
+            <td style="${lb};padding-left:10px">DEA</td><td style="${vl('#3498db')}">${d.dea?.toFixed(3)||'-'}</td>
+            <td style="${lb};padding-left:10px">MACD</td><td style="${vl()}">${d.hist?.toFixed(3)||'-'}</td>
+          </tr>
+          <tr>
+            <td style="${lb}">K</td><td style="${vl('#f1c40f')}">${d.k?.toFixed(3)||'-'}</td>
+            <td style="${lb};padding-left:10px">D</td><td style="${vl('#3498db')}">${d.d?.toFixed(3)||'-'}</td>
+            <td style="${lb};padding-left:10px">J</td><td style="${vl('#e74c3c')}">${d.j?.toFixed(3)||'-'}</td>
+          </tr>
+        </table>`;
+      }
+    },
+    grid:[
+      {left:65,right:65,top:28,height:'42%'},
+      {left:65,right:65,top:'50%',height:'10%'},
+      {left:65,right:65,top:'64%',height:'14%'},
+      {left:65,right:65,top:'82%',height:'14%'},
+    ],
+    xAxis:[mkX(0,true),mkX(1),mkX(2),mkX(3)],
+    yAxis:[mkY(0), mkY(1,v=>fmtVol(v)), mkY(2), mkY(3)],
+    dataZoom:[{type:'inside',xAxisIndex:[0,1,2,3],start:Math.max(0,(1-120/len)*100),end:100,zoomOnMouseWheel:false,moveOnMouseWheel:false,moveOnMouseMove:false}],
+    series:[
+      {name:'K线',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:ohlc,itemStyle:{color:UP,color0:DN,borderColor:UP,borderColor0:DN}},
+      {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma5,symbol:'none',lineStyle:{width:1,color:MA_C[0]}},
+      {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma10,symbol:'none',lineStyle:{width:1,color:MA_C[2]}},
+      {name:'MA20',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma20,symbol:'none',lineStyle:{width:1,color:MA_C[3]}},
+      {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:vols},
+      {name:'MACD柱',type:'bar',xAxisIndex:2,yAxisIndex:2,data:hist},
+      {name:'DIF',type:'line',xAxisIndex:2,yAxisIndex:2,data:dif,symbol:'none',lineStyle:{width:1,color:'#f1c40f'}},
+      {name:'DEA',type:'line',xAxisIndex:2,yAxisIndex:2,data:dea,symbol:'none',lineStyle:{width:1,color:'#3498db'}},
+      {name:'K',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjK,symbol:'none',lineStyle:{width:1,color:'#f1c40f'}},
+      {name:'D',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjD,symbol:'none',lineStyle:{width:1,color:'#3498db'}},
+      {name:'J',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjJ,symbol:'none',lineStyle:{width:1,color:'#e74c3c'}},
+    ],
+  }, true);
+}
+
+window.addEventListener('resize', () => chart.resize());
+
+chart.getZr().on('mousewheel', function(e) {
+  e.event.preventDefault();
+  const dz = chart.getOption().dataZoom[0];
+  const s = dz.start, en = dz.end, range = en - s;
+  const dx = e.event.deltaX, dy = e.event.deltaY;
+  if (Math.abs(dx) > Math.abs(dy) && !e.event.ctrlKey) {
+    const step = range * .05 * Math.sign(dx);
+    const ns = Math.max(0, Math.min(100 - range, s + step));
+    chart.dispatchAction({type:'dataZoom', start:ns, end:ns+range});
+  } else {
+    const f = e.event.ctrlKey ? (dy>0?1.1:.9) : (dy>0?1.05:.95);
+    const nr = Math.max(1, range * f);
+    const c = (s+en)/2;
+    chart.dispatchAction({type:'dataZoom', start:Math.max(0,c-nr/2), end:Math.min(100,c+nr/2)});
+  }
+});
+
+// Get stock code from URL: /stock/600519 -> '600519'
+const code = window.location.pathname.split('/').pop() || '600519';
+loadStock(code);
+</script>
+</body>
+</html>

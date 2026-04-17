@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股数据分析平台</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+
+/* Nav */
+.nav {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 24px; background: #16213e; border-bottom: 1px solid #0f3460;
+}
+.nav h1 { font-size: 20px; color: #e94560; }
+.nav-right { display: flex; align-items: center; gap: 12px; }
+.search {
+  padding: 7px 14px; width: 240px; background: #0f3460; border: 1px solid #2a2a4a;
+  border-radius: 4px; color: #fff; font-size: 14px; outline: none;
+}
+.search:focus { border-color: #e94560; }
+.btn {
+  padding: 7px 16px; border-radius: 4px; border: none; cursor: pointer;
+  font-size: 13px; transition: background .2s;
+}
+.btn-update { background: #0f3460; color: #e0e0e0; border: 1px solid #2a2a4a; }
+.btn-update:hover { background: #162447; }
+.btn-update.running { background: #e94560; color: #fff; }
+.status { font-size: 12px; color: #888; }
+
+/* Stats bar */
+.stats {
+  display: flex; gap: 24px; padding: 10px 24px; background: #16213e;
+  border-bottom: 1px solid #0f3460; font-size: 13px;
+}
+.stats .label { color: #666; margin-right: 6px; }
+.stats .val { color: #e94560; font-weight: 600; }
+
+/* Table */
+.table-wrap { padding: 16px 24px; }
+table { width: 100%; border-collapse: collapse; }
+th {
+  text-align: left; padding: 8px 12px; font-size: 12px; color: #666;
+  border-bottom: 1px solid #2a2a4a; font-weight: normal;
+}
+td { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #1e1e30; }
+tr:hover td { background: #16213e; }
+.up { color: #e74c3c; }
+.down { color: #2ecc71; }
+.code-link { color: #3498db; text-decoration: none; }
+.code-link:hover { text-decoration: underline; }
+
+/* Pagination */
+.pager {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 16px; font-size: 13px;
+}
+.pager button {
+  padding: 4px 12px; background: #0f3460; border: 1px solid #2a2a4a;
+  border-radius: 4px; color: #e0e0e0; cursor: pointer;
+}
+.pager button:disabled { opacity: .3; cursor: default; }
+.pager .info { color: #666; }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <h1>A股数据分析平台</h1>
+  <div class="nav-right">
+    <span class="status" id="status"></span>
+    <input class="search" id="searchInput" type="text" placeholder="搜索股票代码..." autocomplete="off">
+    <button class="btn btn-update" id="updateBtn" onclick="triggerUpdate()">更新数据</button>
+  </div>
+</div>
+
+<div class="stats" id="stats"></div>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>代码</th><th>最新价</th><th>涨跌幅</th><th>数据日期</th></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<div class="pager" id="pager"></div>
+
+<script>
+let page = 1, q = '', total = 0;
+const size = 50;
+
+const searchInput = document.getElementById('searchInput');
+let searchTimer;
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { q = searchInput.value.trim(); page = 1; load(); }, 300);
+});
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { q = searchInput.value.trim(); page = 1; load(); }
+});
+
+async function load() {
+  const resp = await fetch(`/api/stocks?q=${q}&page=${page}&size=${size}`);
+  const json = await resp.json();
+  total = json.total;
+  const data = json.data;
+
+  document.getElementById('stats').innerHTML =
+    `<span><span class="label">股票总数</span><span class="val">${total}</span></span>` +
+    `<span><span class="label">当前页</span><span class="val">${page} / ${Math.ceil(total/size) || 1}</span></span>`;
+
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = data.map(s => {
+    const cls = s.pct_change >= 0 ? 'up' : 'down';
+    const sign = s.pct_change >= 0 ? '+' : '';
+    return `<tr>
+      <td><a class="code-link" href="/stock/${s.code}">${s.code}</a></td>
+      <td class="${cls}">${s.close.toFixed(2)}</td>
+      <td class="${cls}">${sign}${s.pct_change.toFixed(2)}%</td>
+      <td style="color:#555">${s.date}</td>
+    </tr>`;
+  }).join('');
+
+  const totalPages = Math.ceil(total / size) || 1;
+  document.getElementById('pager').innerHTML =
+    `<button ${page<=1?'disabled':''} onclick="go(${page-1})">上一页</button>` +
+    `<span class="info">${page} / ${totalPages}</span>` +
+    `<button ${page>=totalPages?'disabled':''} onclick="go(${page+1})">下一页</button>`;
+}
+
+function go(p) { page = p; load(); window.scrollTo(0,0); }
+
+// Update
+async function triggerUpdate() {
+  const btn = document.getElementById('updateBtn');
+  btn.classList.add('running');
+  btn.textContent = '更新中...';
+  await fetch('/api/update', {method:'POST'});
+  pollStatus();
+}
+
+async function pollStatus() {
+  const resp = await fetch('/api/update/status');
+  const s = await resp.json();
+  const el = document.getElementById('status');
+  const btn = document.getElementById('updateBtn');
+  if (s.running) {
+    el.textContent = '正在更新数据...';
+    btn.classList.add('running');
+    btn.textContent = '更新中...';
+    setTimeout(pollStatus, 2000);
+  } else {
+    el.textContent = s.message || '就绪';
+    btn.classList.remove('running');
+    btn.textContent = '更新数据';
+    if (!s.running) load(); // refresh list
+  }
+}
+
+load();
+pollStatus();
+</script>
+</body>
+</html>
