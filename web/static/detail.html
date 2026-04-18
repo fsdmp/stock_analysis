@@ -321,11 +321,13 @@ function calcSR(rows) {
     const br = d.high - d.low;
     if (hi) {
       // Rule 1: full score if close is near high (top 30% of bar), half if just wick
-      const sc = br > 0 && (d.high - d.close) / br < 0.3 ? base : Math.round(base * 0.5);
+      let sc = br > 0 && (d.high - d.close) / br < 0.3 ? base : Math.round(base * 0.5);
+      if (!isRecent && bwd >= 5 && fwd >= 5) sc = Math.max(sc, base);
       pts.push({p: d.high, s: sc});
     }
     if (lo) {
-      const sc = br > 0 && (d.close - d.low) / br < 0.3 ? base : Math.round(base * 0.5);
+      let sc = br > 0 && (d.close - d.low) / br < 0.3 ? base : Math.round(base * 0.5);
+      if (!isRecent && bwd >= 5 && fwd >= 5) sc = Math.max(sc, base);
       pts.push({p: d.low, s: sc});
     }
   }
@@ -517,6 +519,146 @@ function calcSR(rows) {
   return {resistance: res.slice(0, 3), support: sup.slice(0, 3)};
 }
 
+// === Signal Detection ===
+function calcSignals(rows) {
+  const len = rows.length, sig = {ma:[],macd:[],macdDiv:[],kdj:[],kdjExt:[],vol:[],squeeze:[],volPrice:[]};
+  if (len < 30) return sig;
+  const s0 = Math.max(1, len - 300), V = v => v != null && isFinite(v);
+
+  // MA Cross (MA5×MA10, MA10×MA20)
+  for (let i = s0; i < len; i++) {
+    const c = R(rows,i), p = R(rows,i-1);
+    if (V(p.ma5)&&V(p.ma10)&&V(c.ma5)&&V(c.ma10)) {
+      if (p.ma5<=p.ma10 && c.ma5>c.ma10) sig.ma.push({d:c.date,v:c.ma5,g:1,nm:'5/10'});
+      if (p.ma5>=p.ma10 && c.ma5<c.ma10) sig.ma.push({d:c.date,v:c.ma5,g:0,nm:'5/10'});
+    }
+    if (V(p.ma10)&&V(p.ma20)&&V(c.ma10)&&V(c.ma20)) {
+      if (p.ma10<=p.ma20 && c.ma10>c.ma20) sig.ma.push({d:c.date,v:c.ma10,g:1,nm:'10/20'});
+      if (p.ma10>=p.ma20 && c.ma10<c.ma20) sig.ma.push({d:c.date,v:c.ma10,g:0,nm:'10/20'});
+    }
+  }
+  // MACD Cross
+  for (let i = s0; i < len; i++) {
+    const c = R(rows,i), p = R(rows,i-1);
+    if (!V(p.dif)||!V(c.dif)) continue;
+    if (p.dif<=p.dea && c.dif>c.dea) sig.macd.push({d:c.date,v:c.dea,g:1});
+    if (p.dif>=p.dea && c.dif<c.dea) sig.macd.push({d:c.date,v:c.dea,g:0});
+  }
+  // KDJ Cross
+  for (let i = s0; i < len; i++) {
+    const c = R(rows,i), p = R(rows,i-1);
+    if (!V(p.k)||!V(c.k)) continue;
+    if (p.k<=p.d && c.k>c.d) sig.kdj.push({d:c.date,v:c.d,g:1});
+    if (p.k>=p.d && c.k<c.d) sig.kdj.push({d:c.date,v:c.d,g:0});
+  }
+  // KDJ Overbought/Oversold + 钝化 (综合K/D判断，非仅看J)
+  let obDays=0, osDays=0;
+  for (let i = s0; i < len; i++) {
+    const d = R(rows,i);
+    if (!V(d.k)||!V(d.d)) { obDays=0; osDays=0; continue; }
+    const isOB = d.k>80 && d.d>70;
+    const isOS = d.k<20 && d.d<30;
+    if (isOB) {
+      obDays++;
+      if (obDays===1) sig.kdjExt.push({d:d.date,v:d.k,g:1,dh:0});       // 首日进入超买
+      else if (obDays===5) sig.kdjExt.push({d:d.date,v:d.k,g:1,dh:1});   // 连续5日→钝化
+    } else { obDays=0; }
+    if (isOS) {
+      osDays++;
+      if (osDays===1) sig.kdjExt.push({d:d.date,v:d.k,g:0,dh:0});
+      else if (osDays===5) sig.kdjExt.push({d:d.date,v:d.k,g:0,dh:1});
+    } else { osDays=0; }
+  }
+  // Volume: 天量 / 巨量(10日峰) / 地量(30日谷)
+  for (let i = Math.max(s0,30); i < len; i++) {
+    const d = R(rows,i), vol = d.vol;
+    if (!vol||vol<=0) continue;
+    let s5=0,c5=0,s20=0,c20=0;
+    for(let j=i-5;j<i;j++){const v=R(rows,j).vol||0;if(v>0){s5+=v;c5++;}}
+    for(let j=i-20;j<i;j++){const v=R(rows,j).vol||0;if(v>0){s20+=v;c20++;}}
+    if(c5<3) continue;
+    const ma5=s5/c5, ma20=c20>=10?s20/c20:ma5;
+    const r5=vol/ma5, r20=vol/ma20;
+    // 天量: 120日新高
+    let isNewH=true;
+    for(let j=Math.max(0,i-120);j<i;j++){if((R(rows,j).vol||0)>=vol)isNewH=false;}
+    // 巨量: 近10日最高量 + 量比≥2.5
+    let isPeak10=true;
+    for(let j=Math.max(0,i-10);j<i;j++){if((R(rows,j).vol||0)>=vol)isPeak10=false;}
+    // 地量: 近30日最低量 + 不足均量50%
+    let isValley30=true;
+    for(let j=Math.max(0,i-30);j<i;j++){const v=R(rows,j).vol||0;if(v>0&&v<vol)isValley30=false;}
+    if(isNewH) sig.vol.push({d:d.date,v:vol,g:3});                          // 天量
+    else if(isPeak10&&(r5>=2.5||r20>=2.5)) sig.vol.push({d:d.date,v:vol,g:1}); // 巨量
+    if(isValley30&&r20<0.5) sig.vol.push({d:d.date,v:vol,g:0});              // 地量
+  }
+  // MA Squeeze: MA5/10/20收敛至近10日最窄 + 量能判方向
+  for (let i = Math.max(s0,20); i < len; i++) {
+    const d = R(rows,i);
+    if(!V(d.ma5)||!V(d.ma10)||!V(d.ma20)) continue;
+    const spread=(Math.max(d.ma5,d.ma10,d.ma20)-Math.min(d.ma5,d.ma10,d.ma20))/d.close*100;
+    if(spread>=1.5) continue;
+    let isMin=true;
+    for(let j=Math.max(s0,i-10);j<i;j++){
+      const dj=R(rows,j);
+      if(!V(dj.ma5)||!V(dj.ma10)||!V(dj.ma20)) continue;
+      const s2=(Math.max(dj.ma5,dj.ma10,dj.ma20)-Math.min(dj.ma5,dj.ma10,dj.ma20))/dj.close*100;
+      if(s2<=spread){isMin=false;break;}
+    }
+    if(!isMin) continue;
+    // 量能方向: 近3日均量 vs 前3日均量
+    let vr=0,vp=0;
+    for(let j=i-2;j<=i;j++) vr+=(R(rows,j).vol||0);
+    for(let j=i-5;j<=i-3;j++) vp+=(R(rows,j).vol||0);
+    vr/=3; vp/=3;
+    const volUp=vr>vp*1.1;
+    const aboveMA=d.close>Math.max(d.ma5,d.ma10,d.ma20);
+    const belowMA=d.close<Math.min(d.ma5,d.ma10,d.ma20);
+    if(volUp&&aboveMA) sig.squeeze.push({d:d.date,v:d.close,g:1});       // 粘合放量↑
+    else if(volUp&&belowMA) sig.squeeze.push({d:d.date,v:d.close,g:-1}); // 粘合放量↓
+    else sig.squeeze.push({d:d.date,v:d.close,g:0});                     // 粘合缩量
+  }
+  // MACD Divergence (price peaks/troughs vs DIF)
+  const pk=[],tr=[];
+  for (let i = s0+3; i < len-2; i++) {
+    const d = R(rows,i);
+    if (!V(d.close)||!V(d.dif)) continue;
+    let ip=true,it=true;
+    for (let j=i-2;j<=i+2;j++){
+      if(j===i)continue;
+      const dj=R(rows,j);
+      if(dj.close>=d.close)ip=false;
+      if(dj.close<=d.close)it=false;
+    }
+    if(ip) pk.push(i);
+    if(it) tr.push(i);
+  }
+  // Top divergence: price higher high + DIF lower high
+  for (let i=1;i<pk.length;i++){
+    const a=pk[i-1],b=pk[i],pa=R(rows,a),pb=R(rows,b);
+    if(!V(pa.dif)||!V(pb.dif))continue;
+    if(pb.close>pa.close && pb.dif<pa.dif) sig.macdDiv.push({d:pb.date,v:pb.dif,g:1});
+  }
+  // Bottom divergence: price lower low + DIF higher low
+  for (let i=1;i<tr.length;i++){
+    const a=tr[i-1],b=tr[i],pa=R(rows,a),pb=R(rows,b);
+    if(!V(pa.dif)||!V(pb.dif))continue;
+    if(pb.close<pa.close && pb.dif>pa.dif) sig.macdDiv.push({d:pb.date,v:pb.dif,g:0});
+  }
+  // 量价背离 (复用峰谷: 价格创新高但量能萎缩 / 价格创新低且缩量)
+  for (let i=1;i<pk.length;i++){
+    const a=pk[i-1],b=pk[i],pa=R(rows,a),pb=R(rows,b);
+    if(pb.close>pa.close&&(pb.vol||0)<(pa.vol||0)*0.8)
+      sig.volPrice.push({d:pb.date,v:pb.vol,g:1}); // 量价顶背离
+  }
+  for (let i=1;i<tr.length;i++){
+    const a=tr[i-1],b=tr[i],pa=R(rows,a),pb=R(rows,b);
+    if(pb.close<pa.close&&(pb.vol||0)<(pa.vol||0)*0.7)
+      sig.volPrice.push({d:pb.date,v:pb.vol,g:0}); // 量价底背离(卖盘枯竭)
+  }
+  return sig;
+}
+
 let _hoverIdx = -1;
 
 function renderChart() {
@@ -534,6 +676,42 @@ function renderChart() {
     hist[i]={value:d.hist, itemStyle:{color:d.hist>=0?UP:DN}};
     kdjK[i]=d.k; kdjD[i]=d.d; kdjJ[i]=d.j;
   }
+
+  // === Signals ===
+  const sig = calcSignals(rows);
+  const _mk = (arr, txt, color, pos) => arr.map(s => ({
+    coord:[s.d,s.v], symbol:'circle', symbolSize:1,
+    label:{show:true, formatter:txt, fontSize:9, color, position:pos, distance:4,
+      textShadowColor:'rgba(0,0,0,0.6)', textShadowBlur:2}
+  }));
+  const maMP = sig.ma.slice(-15).map(s => ({
+    coord:[s.d,s.v], symbol:'circle', symbolSize:1,
+    label:{show:true, formatter:s.nm+(s.g?'金叉':'死叉'), fontSize:8,
+      color:s.g?'#f39c12':'#9b59b6', position:s.g?'top':'bottom', distance:4,
+      textShadowColor:'rgba(0,0,0,0.6)', textShadowBlur:2}
+  }));
+  const macdMP = _mk(sig.macd.filter(s=>s.g),'金叉','#f39c12','top')
+    .concat(_mk(sig.macd.filter(s=>!s.g),'死叉','#9b59b6','bottom'));
+  const macdDivMP = _mk(sig.macdDiv.filter(s=>s.g),'顶背离','#e74c3c','top')
+    .concat(_mk(sig.macdDiv.filter(s=>!s.g),'底背离','#2ecc71','bottom'));
+  const kdjMP = _mk(sig.kdj.filter(s=>s.g),'金叉','#f39c12','top')
+    .concat(_mk(sig.kdj.filter(s=>!s.g),'死叉','#9b59b6','bottom'));
+  const kdjExtMP = _mk(sig.kdjExt.filter(s=>s.g&&!s.dh),'超买','#e74c3c','top')
+    .concat(_mk(sig.kdjExt.filter(s=>!s.g&&!s.dh),'超卖','#2ecc71','bottom'))
+    .concat(_mk(sig.kdjExt.filter(s=>s.g&&s.dh),'钝化','#ff9800','top'))
+    .concat(_mk(sig.kdjExt.filter(s=>!s.g&&s.dh),'钝化','#ff9800','bottom'));
+  const volMP = _mk(sig.vol.filter(s=>s.g===3),'天量','#ff4444','top')
+    .concat(_mk(sig.vol.filter(s=>s.g===1),'巨量','#e74c3c','top'))
+    .concat(_mk(sig.vol.filter(s=>s.g===0),'地量','#2ecc71','top'));
+  const squeezeMP = sig.squeeze.map(s => ({
+    coord:[s.d,s.v], symbol:'circle', symbolSize:1,
+    label:{show:true, formatter:s.g===1?'粘合↑':s.g===-1?'粘合↓':'粘合缩量',
+      fontSize:9, color:s.g===1?'#2ecc71':s.g===-1?'#e74c3c':'#ff9800',
+      position:s.g>=0?'top':'bottom', distance:4,
+      textShadowColor:'rgba(0,0,0,0.6)', textShadowBlur:2}
+  }));
+  const volPriceMP = _mk(sig.volPrice.filter(s=>s.g),'量价顶背离','#e74c3c','top')
+    .concat(_mk(sig.volPrice.filter(s=>!s.g),'量价底背离','#2ecc71','bottom'));
 
   // === Support/Resistance Zones ===
   const zones = calcSR(rows);
@@ -652,14 +830,18 @@ function renderChart() {
       {name:'S/R',type:'line',xAxisIndex:0,yAxisIndex:0,data:dates.map(function(){return null}),
         symbol:'none',lineStyle:{width:0},silent:true,tooltip:{show:false},z:100,
         markArea:{silent:true,data:maData}},
-      {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma5,symbol:'none',silent:true,lineStyle:{width:1,color:MA_C[0]}},
+      {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma5,symbol:'none',silent:true,lineStyle:{width:1,color:MA_C[0]},
+        markPoint:(maMP.length||squeezeMP.length)?{data:maMP.concat(squeezeMP),animation:false,silent:true}:undefined},
       {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma10,symbol:'none',silent:true,lineStyle:{width:1,color:MA_C[2]}},
       {name:'MA20',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma20,symbol:'none',silent:true,lineStyle:{width:1,color:MA_C[3]}},
-      {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:vols},
+      {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:vols,
+        markPoint:(volMP.length||volPriceMP.length)?{data:volMP.concat(volPriceMP),animation:false,silent:true}:undefined},
       {name:'MACD柱',type:'bar',xAxisIndex:2,yAxisIndex:2,data:hist},
-      {name:'DIF',type:'line',xAxisIndex:2,yAxisIndex:2,data:dif,symbol:'none',silent:true,lineStyle:{width:1,color:'#f1c40f'}},
+      {name:'DIF',type:'line',xAxisIndex:2,yAxisIndex:2,data:dif,symbol:'none',silent:true,lineStyle:{width:1,color:'#f1c40f'},
+        markPoint:(macdMP.length||macdDivMP.length)?{data:macdMP.concat(macdDivMP),animation:false,silent:true}:undefined},
       {name:'DEA',type:'line',xAxisIndex:2,yAxisIndex:2,data:dea,symbol:'none',silent:true,lineStyle:{width:1,color:'#3498db'}},
-      {name:'K',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjK,symbol:'none',silent:true,lineStyle:{width:1,color:'#f1c40f'}},
+      {name:'K',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjK,symbol:'none',silent:true,lineStyle:{width:1,color:'#f1c40f'},
+        markPoint:(kdjMP.length||kdjExtMP.length)?{data:kdjMP.concat(kdjExtMP),animation:false,silent:true}:undefined},
       {name:'D',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjD,symbol:'none',silent:true,lineStyle:{width:1,color:'#3498db'}},
       {name:'J',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjJ,symbol:'none',silent:true,lineStyle:{width:1,color:'#e74c3c'}},
     ],

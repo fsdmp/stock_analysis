@@ -88,18 +88,24 @@ def _force_relogin():
     _ensure_login()
 
 
+def _is_network_error(rs) -> bool:
+    """Check if baostock result indicates a network/session error requiring re-login."""
+    msg = getattr(rs, "error_msg", "")
+    return any(kw in msg for kw in ("Broken pipe", "网络接收错误", "未登录"))
+
+
 def bs_query_iter(func, *args, **kwargs):
     """Execute a baostock query with iteration, under lock + auto re-login.
 
     Returns (rows, rs) where rows is list of row data and rs is the result set.
-    If session is lost ("用户未登录"), force re-login and retry once.
+    If session is lost or network error occurs, force re-login and retry once.
     """
     with _bs_lock:
         _ensure_login()
         rs = func(*args, **kwargs)
 
-        if rs.error_code != "0" and "未登录" in getattr(rs, "error_msg", ""):
-            logger.warning("Baostock session lost, re-logging in...")
+        if rs.error_code != "0" and _is_network_error(rs):
+            logger.warning(f"Baostock session error ({rs.error_msg}), re-logging in...")
             _force_relogin()
             rs = func(*args, **kwargs)
 
