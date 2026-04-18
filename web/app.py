@@ -141,6 +141,34 @@ def api_stock(code):
     return jsonify({"columns": cols, "data": df.values.tolist(), "name": _stock_names.get(code, "")})
 
 
+@app.route("/api/analysis/<code>")
+def api_analysis(code):
+    """Return support/resistance zones and trading signals for a stock."""
+    code = code.zfill(6)
+    path = DATA_DIR / f"{code}.parquet"
+    if not path.exists():
+        return jsonify({"error": f"Stock {code} not found"}), 404
+
+    from stock_data.analysis import analyze_stock
+    cols = [
+        "date", "open", "close", "high", "low", "volume", "pct_change",
+        "ma5", "ma7", "ma10", "ma20",
+        "macd_dif", "macd_dea", "macd_hist",
+        "kdj_k", "kdj_d", "kdj_j",
+    ]
+    df = pd.read_parquet(path, columns=cols)
+
+    start = request.args.get("start")
+    end = request.args.get("end")
+    if start:
+        df = df[df["date"] >= pd.Timestamp(start)]
+    if end:
+        df = df[df["date"] <= pd.Timestamp(end)]
+
+    result = analyze_stock(df)
+    return jsonify(result)
+
+
 @app.route("/api/intraday/<code>/<date>")
 def api_intraday(code, date):
     """Return minute-level intraday data for a stock on a specific date.
