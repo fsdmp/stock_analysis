@@ -517,6 +517,8 @@ function calcSR(rows) {
   return {resistance: res.slice(0, 3), support: sup.slice(0, 3)};
 }
 
+let _hoverIdx = -1;
+
 function renderChart() {
   const rows = rawData.data, len = rows.length;
   const dates=[], ohlc=[], vols=[], ma5=[],ma7=[],ma10=[],ma20=[];
@@ -595,7 +597,8 @@ function renderChart() {
       textStyle:{color:'#e0e0e0',fontSize:12},
       formatter:function(p){
         if(!p||!p.length) return '';
-        const d = R(rows, p[0].dataIndex);
+        const di = _hoverIdx>=0&&_hoverIdx<rows.length ? _hoverIdx : p[0].dataIndex;
+        const d = R(rows, di);
         const pct = d.pct||0;
         const c = pct>=0?'#e74c3c':'#2ecc71';
         const lb='color:#555;font-size:11px;padding-right:4px;white-space:nowrap';
@@ -668,6 +671,13 @@ window.addEventListener('resize', () => {
   if (intradayChart) intradayChart.resize();
 });
 
+chart.getZr().on('mousemove', function(e) {
+  try {
+    const pt = chart.convertFromPixel({seriesIndex: 0}, [e.offsetX, e.offsetY]);
+    if (pt && pt[0] != null) _hoverIdx = Math.round(pt[0]);
+  } catch(ex) {}
+});
+
 chart.getZr().on('mousewheel', function(e) {
   e.event.preventDefault();
   const dz = chart.getOption().dataZoom[0];
@@ -687,6 +697,7 @@ chart.getZr().on('mousewheel', function(e) {
 
 // === Intraday (分时图) ===
 let intradayChart = null;
+let _intraIdx = -1;
 let intradayMode = 'timeline';  // 'timeline' | 'k5' | 'k1'
 let intradayDateIndex = -1;     // index into rawData.data dates
 let intradayDates = [];          // cached date list from rawData
@@ -728,6 +739,12 @@ async function openIntraday(dateStr, dateIdx) {
   const container = document.getElementById('intradayChart');
   if (intradayChart) { intradayChart.dispose(); intradayChart = null; }
   intradayChart = echarts.init(container, 'dark');
+  intradayChart.getZr().on('mousemove', function(e) {
+    try {
+      const pt = intradayChart.convertFromPixel({seriesIndex: 0}, [e.offsetX, e.offsetY]);
+      if (pt && pt[0] != null) _intraIdx = Math.round(pt[0]);
+    } catch(ex) {}
+  });
 
   await loadAndRenderIntraday();
 }
@@ -851,7 +868,7 @@ function renderTimeline(data, refPrice) {
       padding:[6,10],textStyle:{color:'#e0e0e0',fontSize:12},
       formatter:function(p){
         if(!p||!p.length)return'';
-        const i=p[0].dataIndex, r=rows[i];
+        const i=_intraIdx>=0&&_intraIdx<rows.length?_intraIdx:p[0].dataIndex, r=rows[i];
         const price=r[ci.close]||0;
         const pct=((price-openPrice)/openPrice*100);
         const cls=price>=openPrice?'#e74c3c':'#2ecc71';
@@ -982,7 +999,7 @@ function renderIntradayKline(data, refPrice) {
       padding:[6,10],textStyle:{color:'#e0e0e0',fontSize:12},
       formatter:function(p){
         if(!p||!p.length)return'';
-        const i=p[0].dataIndex, r=rows[i];
+        const i=_intraIdx>=0&&_intraIdx<rows.length?_intraIdx:p[0].dataIndex, r=rows[i];
         const o=r[ci.open],c=r[ci.close],h=r[ci.high],l=r[ci.low];
         const pct=((c-openPrice)/openPrice*100);
         const cls=c>=openPrice?'#e74c3c':'#2ecc71';
