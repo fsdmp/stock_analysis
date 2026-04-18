@@ -145,10 +145,20 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
 // === Debounce utility ===
 function debounce(fn, delay) {
   let timer = null;
+  let lastArgs = null;
+  let lastThis = null;
   return function(...args) {
+    lastArgs = args;
+    lastThis = this;
     if (timer) return;
-    timer = setTimeout(() => { timer = null; }, delay);
-    fn.apply(this, args);
+    timer = setTimeout(() => {
+      timer = null;
+      if (lastArgs) {
+        fn.apply(lastThis, lastArgs);
+        lastArgs = null;
+        lastThis = null;
+      }
+    }, delay);
   };
 }
 
@@ -592,12 +602,12 @@ function calcSignals(rows) {
     else if(isPeak10&&(r5>=2.5||r20>=2.5)) sig.vol.push({d:d.date,v:vol,g:1}); // 巨量
     if(isValley30&&r20<0.5) sig.vol.push({d:d.date,v:vol,g:0});              // 地量
   }
-  // MA Squeeze: MA5/10/20收敛至近10日最窄 + 量能判方向
+  // MA Squeeze: MA5/10/20收敛 + 评分判方向(MA排列+偏离+趋势+量能+MACD+逆势过滤)
   for (let i = Math.max(s0,20); i < len; i++) {
     const d = R(rows,i);
     if(!V(d.ma5)||!V(d.ma10)||!V(d.ma20)) continue;
     const spread=(Math.max(d.ma5,d.ma10,d.ma20)-Math.min(d.ma5,d.ma10,d.ma20))/d.close*100;
-    if(spread>=1.5) continue;
+    if(spread>=1.2) continue;
     let isMin=true;
     for(let j=Math.max(s0,i-10);j<i;j++){
       const dj=R(rows,j);
@@ -606,17 +616,55 @@ function calcSignals(rows) {
       if(s2<=spread){isMin=false;break;}
     }
     if(!isMin) continue;
-    // 量能方向: 近3日均量 vs 前3日均量
+    // 收敛确认: 5-10日前spread应更宽
+    let maxPrev=0;
+    for(let j=Math.max(s0,i-10);j<Math.max(s0,i-3);j++){
+      const dj=R(rows,j);
+      if(!V(dj.ma5)||!V(dj.ma10)||!V(dj.ma20)) continue;
+      const s2=(Math.max(dj.ma5,dj.ma10,dj.ma20)-Math.min(dj.ma5,dj.ma10,dj.ma20))/dj.close*100;
+      if(s2>maxPrev)maxPrev=s2;
+    }
+    if(maxPrev<=spread*1.3) continue;
+    // === 方向评分 ===
+    let bs=0,bes=0;
+    const bullAlign=d.ma5>d.ma10&&d.ma10>d.ma20;
+    const bearAlign=d.ma5<d.ma10&&d.ma10<d.ma20;
+    if(bullAlign) bs+=3;
+    if(bearAlign) bes+=3;
+    const maCenter=(d.ma5+d.ma10+d.ma20)/3;
+    const dev=(d.close-maCenter)/d.close*100;
+    if(dev>0.5) bs+=2; else if(dev>0.2) bs+=1;
+    if(dev<-0.5) bes+=2; else if(dev<-0.2) bes+=1;
+    const ma5p=R(rows,i-5);
+    if(V(ma5p.ma5)&&d.ma5>ma5p.ma5) bs+=1;
+    if(V(ma5p.ma5)&&d.ma5<ma5p.ma5) bes+=1;
     let vr=0,vp=0;
     for(let j=i-2;j<=i;j++) vr+=(R(rows,j).vol||0);
-    for(let j=i-5;j<=i-3;j++) vp+=(R(rows,j).vol||0);
-    vr/=3; vp/=3;
-    const volUp=vr>vp*1.1;
-    const aboveMA=d.close>Math.max(d.ma5,d.ma10,d.ma20);
-    const belowMA=d.close<Math.min(d.ma5,d.ma10,d.ma20);
-    if(volUp&&aboveMA) sig.squeeze.push({d:d.date,v:d.close,g:1});       // 粘合放量↑
-    else if(volUp&&belowMA) sig.squeeze.push({d:d.date,v:d.close,g:-1}); // 粘合放量↓
-    else sig.squeeze.push({d:d.date,v:d.close,g:0});                     // 粘合缩量
+    for(let j=Math.max(s0,i-7);j<Math.max(s0,i-3);j++) vp+=(R(rows,j).vol||0);
+    vr/=3; vp/=Math.max(1,Math.max(s0,i-3)-Math.max(s0,i-7));
+    const volUp=vp>0&&vr>vp*1.15;
+    if(volUp&&dev>0) bs+=1;
+    if(volUp&&dev<0) bes+=1;
+    if(V(d.hist)&&d.hist>0.02) bs+=1;
+    if(V(d.hist)&&d.hist<-0.02) bes+=1;
+    // 大趋势: 20日价格方向
+    const close20=R(rows,Math.max(s0,i-20)).close;
+    const trendUp=close20>0&&d.close>close20;
+    const trendDn=close20>0&&d.close<close20;
+    // 逆势减分 (极端偏离时不减，可能是趋势反转)
+    if(Math.abs(dev)<3){
+      if(trendUp&&bes>bs) bes-=2;
+      if(trendDn&&bs>bes) bs-=2;
+    }
+    if(dev>3) bs-=2;
+    if(dev>3&&trendDn) bes+=2;
+    if(dev<-3&&trendUp) bs+=2;
+    // 方向判定: MA排列需≥3(逆势需≥5), 无排列需≥4且领先≥2
+    if(bullAlign&&bs>=3&&(!trendDn||bs>=5)) sig.squeeze.push({d:d.date,v:d.close,g:1});
+    else if(bearAlign&&bes>=3&&(!trendUp||bes>=5)) sig.squeeze.push({d:d.date,v:d.close,g:-1});
+    else if(bs>=4&&bs>=bes+2) sig.squeeze.push({d:d.date,v:d.close,g:1});
+    else if(bes>=4&&bes>=bs+2) sig.squeeze.push({d:d.date,v:d.close,g:-1});
+    else if(spread<0.5) sig.squeeze.push({d:d.date,v:d.close,g:0});
   }
   // MACD Divergence (price peaks/troughs vs DIF)
   const pk=[],tr=[];
@@ -633,29 +681,110 @@ function calcSignals(rows) {
     if(ip) pk.push(i);
     if(it) tr.push(i);
   }
-  // Top divergence: price higher high + DIF lower high
+  // Top divergence: price higher high + DIF lower high (strict: >1.5% price + >0.01 DIF)
   for (let i=1;i<pk.length;i++){
     const a=pk[i-1],b=pk[i],pa=R(rows,a),pb=R(rows,b);
     if(!V(pa.dif)||!V(pb.dif))continue;
-    if(pb.close>pa.close && pb.dif<pa.dif) sig.macdDiv.push({d:pb.date,v:pb.dif,g:1});
+    if(pb.close>pa.close*1.015 && pb.dif<pa.dif-0.01) sig.macdDiv.push({d:pb.date,v:pb.dif,g:1});
   }
-  // Bottom divergence: price lower low + DIF higher low
+  // Bottom divergence: price lower low + DIF higher low (strict)
   for (let i=1;i<tr.length;i++){
     const a=tr[i-1],b=tr[i],pa=R(rows,a),pb=R(rows,b);
     if(!V(pa.dif)||!V(pb.dif))continue;
-    if(pb.close<pa.close && pb.dif>pa.dif) sig.macdDiv.push({d:pb.date,v:pb.dif,g:0});
+    if(pb.close<pa.close*0.985 && pb.dif>pa.dif+0.01) sig.macdDiv.push({d:pb.date,v:pb.dif,g:0});
   }
-  // 量价背离 (复用峰谷: 价格创新高但量能萎缩 / 价格创新低且缩量)
+  // 量价背离 (复用峰谷: 价格创新高但量能萎缩 / 价格创新低且缩量, strict thresholds)
   for (let i=1;i<pk.length;i++){
     const a=pk[i-1],b=pk[i],pa=R(rows,a),pb=R(rows,b);
-    if(pb.close>pa.close&&(pb.vol||0)<(pa.vol||0)*0.8)
+    if(pb.close>pa.close*1.02&&(pb.vol||0)<(pa.vol||0)*0.65)
       sig.volPrice.push({d:pb.date,v:pb.vol,g:1}); // 量价顶背离
   }
   for (let i=1;i<tr.length;i++){
     const a=tr[i-1],b=tr[i],pa=R(rows,a),pb=R(rows,b);
-    if(pb.close<pa.close&&(pb.vol||0)<(pa.vol||0)*0.7)
+    if(pb.close<pa.close*0.98&&(pb.vol||0)<(pa.vol||0)*0.6)
       sig.volPrice.push({d:pb.date,v:pb.vol,g:0}); // 量价底背离(卖盘枯竭)
   }
+
+  // === Noise Reduction: Anti-Trap Filters (防主力诱多/诱空 & 量化误导) ===
+  const _di={};for(let i=0;i<len;i++)_di[R(rows,i).date]=i;
+  const _va=(idx,p)=>{let s=0,c=0;for(let j=Math.max(0,idx-p);j<idx;j++){const v=R(rows,j).vol||0;if(v>0){s+=v;c++;}}return c>=3?s/c:0;};
+  function _dedup(arr,gap){if(arr.length<=1)return arr;const r=[];for(let i=0;i<arr.length;i++){const idx=_di[arr[i].d];if(idx==null)continue;if(i+1<arr.length){const ni=_di[arr[i+1].d];if(ni!=null&&ni-idx<gap)continue;}r.push(arr[i]);}return r;}
+
+  // 1. MA Cross: persistence (次日确认) + volume confirmation + anti-whipsaw
+  sig.ma=sig.ma.filter(s=>{
+    const idx=_di[s.d]; if(idx==null) return false;
+    // Persistence: next bar must still hold cross direction
+    if(idx+1<len){
+      const nx=R(rows,idx+1);
+      if(s.g===1){
+        if(s.nm==='5/10'&&V(nx.ma5)&&V(nx.ma10)&&nx.ma5<=nx.ma10) return false;
+        if(s.nm==='10/20'&&V(nx.ma10)&&V(nx.ma20)&&nx.ma10<=nx.ma20) return false;
+      }else{
+        if(s.nm==='5/10'&&V(nx.ma5)&&V(nx.ma10)&&nx.ma5>=nx.ma10) return false;
+        if(s.nm==='10/20'&&V(nx.ma10)&&V(nx.ma20)&&nx.ma10>=nx.ma20) return false;
+      }
+    }
+    // Golden cross volume confirmation: vol >= 70% of 5-day avg (缩量金叉=诱多嫌疑)
+    if(s.g===1){const va5=_va(idx,5);if(va5>0&&(R(rows,idx).vol||0)<va5*0.7)return false;}
+    return true;
+  });
+  sig.ma=_dedup(sig.ma,8);
+
+  // 2. MACD Cross: HIST expansion + volume + anti-whipsaw
+  sig.macd=sig.macd.filter(s=>{
+    const idx=_di[s.d]; if(idx==null) return false;
+    const d=R(rows,idx);
+    // HIST must be expanding vs prev day (交叉力度不足=噪音)
+    if(idx>0){
+      const pv=R(rows,idx-1);
+      if(V(d.hist)&&V(pv.hist)&&Math.abs(d.hist)<=Math.abs(pv.hist)*0.8) return false;
+    }
+    // Golden cross volume confirmation
+    if(s.g===1){const va5=_va(idx,5);if(va5>0&&(d.vol||0)<va5*0.7)return false;}
+    return true;
+  });
+  sig.macd=_dedup(sig.macd,5);
+
+  // 3. KDJ Cross: zone filter (mid-zone 35~65 cross = noise) + volume
+  sig.kdj=sig.kdj.filter(s=>{
+    const idx=_di[s.d]; if(idx==null) return false;
+    const d=R(rows,idx);
+    if(V(d.k)&&d.k>35&&d.k<65) return false;
+    if(s.g===1){const va5=_va(idx,5);if(va5>0&&(d.vol||0)<va5*0.7)return false;}
+    return true;
+  });
+  sig.kdj=_dedup(sig.kdj,5);
+
+  // 4. MACD Divergence: DIF must have meaningful absolute value + dedup
+  sig.macdDiv=sig.macdDiv.filter(s=>{
+    const idx=_di[s.d]; if(idx==null) return false;
+    const d=R(rows,idx);
+    if(V(d.dif)&&Math.abs(d.dif)<0.02) return false;
+    return true;
+  });
+  sig.macdDiv=_dedup(sig.macdDiv,8);
+
+  // 5. Volume: 巨量 requires meaningful price move (巨量滞涨=主力出货)
+  sig.vol=sig.vol.filter(s=>{
+    const idx=_di[s.d]; if(idx==null) return false;
+    if(s.g===1){const pct=R(rows,idx).pct||0;if(Math.abs(pct)<1.0)return false;}
+    return true;
+  });
+  sig.vol=_dedup(sig.vol,5);
+
+  // 6. MA Squeeze: MACD direction confirmation + dedup
+  sig.squeeze=sig.squeeze.filter(s=>{
+    const idx=_di[s.d]; if(idx==null) return false;
+    const d=R(rows,idx);
+    if(s.g===1&&V(d.hist)&&d.hist<-0.05) return false;
+    if(s.g===-1&&V(d.hist)&&d.hist>0.05) return false;
+    return true;
+  });
+  sig.squeeze=_dedup(sig.squeeze,10);
+
+  // 7. Volume-Price Divergence: dedup
+  sig.volPrice=_dedup(sig.volPrice,8);
+
   return sig;
 }
 
@@ -705,8 +834,8 @@ function renderChart() {
     .concat(_mk(sig.vol.filter(s=>s.g===0),'地量','#2ecc71','top'));
   const squeezeMP = sig.squeeze.map(s => ({
     coord:[s.d,s.v], symbol:'circle', symbolSize:1,
-    label:{show:true, formatter:s.g===1?'粘合↑':s.g===-1?'粘合↓':'粘合缩量',
-      fontSize:9, color:s.g===1?'#2ecc71':s.g===-1?'#e74c3c':'#ff9800',
+    label:{show:true, formatter:s.g===1?'粘合↑':s.g===-1?'粘合↓':'粘合待变',
+      fontSize:9, color:s.g===1?'#e74c3c':s.g===-1?'#2ecc71':'#ff9800',
       position:s.g>=0?'top':'bottom', distance:4,
       textShadowColor:'rgba(0,0,0,0.6)', textShadowBlur:2}
   }));
