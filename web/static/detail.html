@@ -46,6 +46,54 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
   width: 1px; height: 14px; background: #2a2a4a; margin: 0 8px; align-self: center;
 }
 #chart { width: 100%; height: calc(100vh - 68px); }
+
+/* Intraday modal */
+.intraday-overlay {
+  display: none; position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,.7);
+}
+.intraday-overlay.active { display: block; }
+.intraday-box {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  width: 92vw; height: 82vh; background: #1a1a2e; border: 1px solid #0f3460;
+  border-radius: 8px; display: flex; flex-direction: column;
+}
+.intraday-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 16px; border-bottom: 1px solid #2a2a4a;
+}
+.intraday-header .title-area { display: flex; align-items: center; gap: 12px; }
+.intraday-header .date-title { color: #e94560; font-size: 15px; font-weight: 600; }
+.intraday-header .nav-hint { color: #555; font-size: 11px; }
+.mode-btns { display: flex; gap: 4px; }
+.mode-btn {
+  padding: 4px 12px; border-radius: 4px; border: 1px solid #2a2a4a;
+  background: #0f3460; color: #888; font-size: 12px; cursor: pointer;
+  transition: all .15s;
+}
+.mode-btn:hover { border-color: #e94560; }
+.mode-btn.active { background: #e94560; color: #fff; border-color: #e94560; }
+.close-btn {
+  background: none; border: none; color: #666; font-size: 22px; cursor: pointer;
+  padding: 0 4px; line-height: 1;
+}
+.close-btn:hover { color: #e94560; }
+#intradayChart { flex: 1; min-height: 0; }
+
+/* Global loading overlay */
+.global-loading {
+  display: none; position: fixed; inset: 0; z-index: 300;
+  background: rgba(26,26,46,.8); justify-content: center; align-items: center;
+}
+.global-loading.active { display: flex; }
+.spinner {
+  width: 36px; height: 36px; border: 3px solid #2a2a4a; border-top-color: #e94560;
+  border-radius: 50%; animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.global-loading .loading-text {
+  color: #888; font-size: 13px; margin-top: 10px;
+}
 </style>
 </head>
 <body>
@@ -64,7 +112,57 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
 
 <div id="chart"></div>
 
+<!-- Global loading -->
+<div class="global-loading" id="globalLoading">
+  <div style="text-align:center">
+    <div class="spinner"></div>
+    <div class="loading-text">加载中...</div>
+  </div>
+</div>
+
+<!-- Intraday modal -->
+<div class="intraday-overlay" id="intradayModal">
+  <div class="intraday-box">
+    <div class="intraday-header">
+      <div class="title-area">
+        <span class="date-title" id="intradayTitle"></span>
+        <span class="nav-hint">← → 切换日期</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div class="mode-btns">
+          <button class="mode-btn active" data-mode="timeline" onclick="switchMode('timeline')">分时</button>
+          <button class="mode-btn" data-mode="k5" onclick="switchMode('k5')">5分K</button>
+          <button class="mode-btn" data-mode="k15" onclick="switchMode('k15')">15分K</button>
+        </div>
+        <button class="close-btn" id="intradayClose">&times;</button>
+      </div>
+    </div>
+    <div id="intradayChart"></div>
+  </div>
+</div>
+
 <script>
+// === Debounce utility ===
+function debounce(fn, delay) {
+  let timer = null;
+  return function(...args) {
+    if (timer) return;
+    timer = setTimeout(() => { timer = null; }, delay);
+    fn.apply(this, args);
+  };
+}
+
+// === Global loading ===
+function showLoading(text) {
+  const el = document.getElementById('globalLoading');
+  if (text) el.querySelector('.loading-text').textContent = text;
+  else el.querySelector('.loading-text').textContent = '加载中...';
+  el.classList.add('active');
+}
+function hideLoading() {
+  document.getElementById('globalLoading').classList.remove('active');
+}
+
 const chart = echarts.init(document.getElementById('chart'), 'dark');
 const UP = '#e74c3c', DN = '#2ecc71';
 const MA_C = ['#f1c40f','#e67e22','#9b59b6','#3498db'];
@@ -80,13 +178,17 @@ searchInput.addEventListener('input', () => {
 });
 searchInput.addEventListener('keydown', e => {
   if (e.key === 'Enter') {
+    e.preventDefault();
     const v = searchInput.value.trim();
-    if (v && /^\d+$/.test(v)) { loadStock(v); dropdown.classList.remove('show'); }
+    if (v && /^\d+$/.test(v)) { debouncedLoad(v); dropdown.classList.remove('show'); }
   }
 });
 document.addEventListener('click', e => {
   if (!e.target.closest('.search-box')) dropdown.classList.remove('show');
 });
+
+// Debounced loadStock for search
+const debouncedLoad = debounce(code => loadStock(code), 500);
 
 async function doSearch(q) {
   if (!q) { dropdown.classList.remove('show'); return; }
@@ -96,7 +198,7 @@ async function doSearch(q) {
   dropdown.innerHTML = stocks.map(s => {
     const cls = s.pct_change >= 0 ? 'up' : 'down';
     const sign = s.pct_change >= 0 ? '+' : '';
-    return `<div class="dropdown-item" onclick="loadStock('${s.code}')">
+    return `<div class="dropdown-item" onclick="debouncedLoad('${s.code}')">
       <span>${s.code}</span><span class="${cls}">${s.close} ${sign}${s.pct_change}%</span>
     </div>`;
   }).join('');
@@ -115,14 +217,20 @@ async function loadStock(code) {
   code = code.padStart(6,'0');
   currentCode = code;
   searchInput.value = code;
-  // Update URL so refresh keeps current stock
   window.history.replaceState(null, '', `/stock/${code}`);
   dropdown.classList.remove('show');
-  const resp = await fetch(`/api/stock/${code}`);
-  rawData = await resp.json();
-  if (rawData.error) { alert(rawData.error); return; }
-  renderChart();
-  renderInfo();
+  showLoading();
+  try {
+    const resp = await fetch(`/api/stock/${code}`);
+    rawData = await resp.json();
+    if (rawData.error) { alert(rawData.error); return; }
+    renderChart();
+    renderInfo();
+  } catch(e) {
+    console.error('loadStock failed:', e);
+  } finally {
+    hideLoading();
+  }
 }
 
 function fmtVol(v) {
@@ -186,10 +294,10 @@ function renderChart() {
     animation:false,
     axisPointer:{link:[{xAxisIndex:'all'}]},
     title:[
-      {text:'K线', left:70, top:8, textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
-      {text:'MA5', left:110, top:8, textStyle:{color:'#f1c40f',fontSize:11,fontWeight:'normal'}},
-      {text:'MA10', left:148, top:8, textStyle:{color:'#9b59b6',fontSize:11,fontWeight:'normal'}},
-      {text:'MA20', left:196, top:8, textStyle:{color:'#3498db',fontSize:11,fontWeight:'normal'}},
+      {text:'K线 (双击查看分时)', left:70, top:8, textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
+      {text:'MA5', left:200, top:8, textStyle:{color:'#f1c40f',fontSize:11,fontWeight:'normal'}},
+      {text:'MA10', left:238, top:8, textStyle:{color:'#9b59b6',fontSize:11,fontWeight:'normal'}},
+      {text:'MA20', left:286, top:8, textStyle:{color:'#3498db',fontSize:11,fontWeight:'normal'}},
       {text:`VOL  ${fmtVol(R(rows,rows.length-1).vol)}`, left:70, top:'49.5%', textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
       {text:'MACD (12,26,9)', left:70, top:'63.5%', textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
       {text:'KDJ (9,3,3)', left:70, top:'81.5%', textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
@@ -263,7 +371,10 @@ function renderChart() {
   }, true);
 }
 
-window.addEventListener('resize', () => chart.resize());
+window.addEventListener('resize', () => {
+  chart.resize();
+  if (intradayChart) intradayChart.resize();
+});
 
 chart.getZr().on('mousewheel', function(e) {
   e.event.preventDefault();
@@ -279,6 +390,405 @@ chart.getZr().on('mousewheel', function(e) {
     const nr = Math.max(1, range * f);
     const c = (s+en)/2;
     chart.dispatchAction({type:'dataZoom', start:Math.max(0,c-nr/2), end:Math.min(100,c+nr/2)});
+  }
+});
+
+// === Intraday (分时图) ===
+let intradayChart = null;
+let intradayMode = 'timeline';  // 'timeline' | 'k5' | 'k1'
+let intradayDateIndex = -1;     // index into rawData.data dates
+let intradayDates = [];          // cached date list from rawData
+let intradayCache = {};          // freq -> JSON data cache
+
+function _getAllDates() {
+  if (!rawData || !rawData.data) return [];
+  return rawData.data.map(r => r[C.date]);
+}
+
+function _freqForMode(mode) {
+  if (mode === 'k15') return '15';
+  return '5';
+}
+
+// Double-click K-line candle -> open intraday
+chart.on('dblclick', function(params) {
+  if (!params || params.componentType !== 'series' || params.seriesName !== 'K线') return;
+  if (!rawData || !rawData.data) return;
+  const idx = params.dataIndex;
+  const dateStr = rawData.data[idx][C.date];
+  showLoading();
+  openIntraday(dateStr, idx);
+});
+
+async function openIntraday(dateStr, dateIdx) {
+  intradayDates = _getAllDates();
+  intradayDateIndex = dateIdx !== undefined ? dateIdx : intradayDates.indexOf(dateStr);
+  if (intradayDateIndex < 0) { hideLoading(); return; }
+  intradayCache = {};
+  intradayMode = 'timeline';
+  updateModeButtons();
+
+  const modal = document.getElementById('intradayModal');
+  modal.classList.add('active');
+  updateIntradayTitle();
+
+  // Create echarts instance
+  const container = document.getElementById('intradayChart');
+  if (intradayChart) { intradayChart.dispose(); intradayChart = null; }
+  intradayChart = echarts.init(container, 'dark');
+
+  await loadAndRenderIntraday();
+}
+
+function updateIntradayTitle() {
+  const dateStr = intradayDates[intradayDateIndex] || '';
+  document.getElementById('intradayTitle').textContent =
+    `${currentCode} · ${dateStr}`;
+}
+
+function updateModeButtons() {
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === intradayMode);
+  });
+}
+
+async function loadAndRenderIntraday() {
+  const dateStr = intradayDates[intradayDateIndex];
+  if (!dateStr) return;
+  const freq = _freqForMode(intradayMode);
+  const cacheKey = `${dateStr}_${freq}`;
+
+  if (!intradayCache[cacheKey]) {
+    showLoading();
+    try {
+      const resp = await fetch(`/api/intraday/${currentCode}/${dateStr}?freq=${freq}`);
+      const data = await resp.json();
+      if (data.error) {
+        hideLoading();
+        intradayChart.setOption({
+          title:{text:data.error, left:'center', top:'center', textStyle:{color:'#888',fontSize:14}}
+        }, true);
+        return;
+      }
+      intradayCache[cacheKey] = data;
+    } catch(e) {
+      hideLoading();
+      return;
+    }
+    hideLoading();
+  }
+
+  const data = intradayCache[cacheKey];
+  // Reference price: previous day's close (昨收)
+  let refPrice = null;
+  if (rawData && rawData.data && intradayDateIndex > 0) {
+    refPrice = R(rawData.data, intradayDateIndex - 1).close;
+  }
+  if (intradayMode === 'timeline') {
+    renderTimeline(data, refPrice);
+  } else {
+    renderIntradayKline(data, refPrice);
+  }
+}
+
+// --- Timeline (分时图) ---
+function renderTimeline(data, refPrice) {
+  const rows = data.data, len = rows.length;
+  if (!len) return;
+
+  // Column indices
+  const ci = {};
+  data.columns.forEach((c, i) => ci[c] = i);
+
+  const times=[], prices=[], vols=[], ma20=[], dif=[], dea=[], hist=[];
+  const openPrice = refPrice || rows[0][ci.open]; // 昨收价 or fallback to first bar open
+
+  for (let i=0; i<len; i++) {
+    const r = rows[i];
+    times[i] = r[ci.time];
+    prices[i] = r[ci.close];
+    vols[i] = {value: r[ci.volume]||0, itemStyle:{color:(r[ci.close]||0)>=(r[ci.open]||0)?UP:DN,opacity:.6}};
+    ma20[i] = r[ci.ma20];
+    dif[i] = r[ci.macd_dif];
+    dea[i] = r[ci.macd_dea];
+    hist[i] = {value: r[ci.macd_hist], itemStyle:{color:(r[ci.macd_hist]||0)>=0?UP:DN}};
+  }
+  // Split prices into up (red) and down (green) for 0-axis coloring
+  const pricesUp = new Array(len).fill(null);
+  const pricesDn = new Array(len).fill(null);
+  for (let i = 0; i < len; i++) {
+    if (prices[i] >= openPrice) pricesUp[i] = prices[i];
+    else pricesDn[i] = prices[i];
+  }
+  for (let i = 1; i < len; i++) {
+    if (prices[i-1] >= openPrice && prices[i] < openPrice) {
+      pricesUp[i] = openPrice;
+      pricesDn[i] = openPrice;
+    } else if (prices[i-1] < openPrice && prices[i] >= openPrice) {
+      pricesDn[i] = openPrice;
+      pricesUp[i] = openPrice;
+    }
+  }
+  // Show first bar as 09:30 (market open)
+  if (times[0] === '09:35') times[0] = '09:30';
+
+  // Symmetric range around openPrice for price & percentage axes
+  const maxDev = Math.max(
+    Math.max(...prices.map(p => Math.abs((p||0) - openPrice))),
+    openPrice * 0.01
+  );
+  const priceMin = openPrice - maxDev;
+  const priceMax = openPrice + maxDev;
+  const pctMin = -maxDev / openPrice * 100;
+  const pctMax = maxDev / openPrice * 100;
+
+  intradayChart.setOption({
+    backgroundColor:'#1a1a2e',
+    animation:false,
+    axisPointer:{link:[{xAxisIndex:'all'}]},
+    title:[
+      {text:'分时',left:70,top:6,textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
+      {text:'均价',left:110,top:6,textStyle:{color:'#3498db',fontSize:11,fontWeight:'normal'}},
+      {text:`VOL`,left:70,top:'63%',textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
+      {text:'MACD',left:70,top:'79%',textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
+    ],
+    tooltip:{
+      trigger:'axis',
+      axisPointer:{type:'line',lineStyle:{color:'#555',type:'dashed',width:1}},
+      backgroundColor:'rgba(22,33,62,.95)',borderWidth:1,borderColor:'#2a2a4a',
+      padding:[6,10],textStyle:{color:'#e0e0e0',fontSize:12},
+      formatter:function(p){
+        if(!p||!p.length)return'';
+        const i=p[0].dataIndex, r=rows[i];
+        const price=r[ci.close]||0;
+        const pct=((price-openPrice)/openPrice*100);
+        const cls=price>=openPrice?'#e74c3c':'#2ecc71';
+        const s=pct>=0?'+':'';
+        const lb='color:#555;font-size:11px;padding-right:4px';
+        const vl=c=>`color:${c||'#bbb'}`;
+        return `<div style="font-size:12px;line-height:1.6;min-width:280px">
+          <div style="padding-bottom:4px;border-bottom:1px solid #2a2a4a;margin-bottom:3px"><b>${r[ci.time]}</b></div>
+          <span style="${lb}">价</span> <span style="${vl(cls)}">${price.toFixed(2)}</span>
+          <span style="${lb}">幅</span> <span style="${vl(cls)}">${s}${pct.toFixed(2)}%</span>
+          <span style="${lb}">均价</span> <span style="${vl('#3498db')}">${r[ci.ma20]?.toFixed(2)||'-'}</span><br>
+          <span style="${lb}">量</span> <span style="${vl()}">${fmtVol(r[ci.volume])}</span>
+          <span style="${lb}">额</span> <span style="${vl()}">${r[ci.amount]?(r[ci.amount]/1e4).toFixed(1)+'万':'-'}</span><br>
+          <span style="${lb}">DIF</span> <span style="${vl('#f1c40f')}">${r[ci.macd_dif]?.toFixed(3)||'-'}</span>
+          <span style="${lb}">DEA</span> <span style="${vl('#3498db')}">${r[ci.macd_dea]?.toFixed(3)||'-'}</span>
+          <span style="${lb}">MACD</span> <span style="${vl((r[ci.macd_hist]||0)>=0?'#e74c3c':'#2ecc71')}">${r[ci.macd_hist]?.toFixed(3)||'-'}</span>
+        </div>`;
+      }
+    },
+    grid:[
+      {left:65,right:65,top:28,bottom:'42%'},
+      {left:65,right:65,top:'64%',height:'12%'},
+      {left:65,right:65,top:'80%',height:'16%'},
+    ],
+    xAxis:[
+      {type:'category',data:times,gridIndex:0,boundaryGap:false,
+        axisLine:{lineStyle:{color:'#2a2a3a'}},axisTick:{show:false},
+        axisLabel:{color:'#555',fontSize:10,
+          interval:function(index,value){
+            return ['09:30','10:00','10:30','11:00','11:30','13:00','13:30','14:00','14:30','15:00'].indexOf(value)>=0;
+          }}},
+      {type:'category',data:times,gridIndex:1,boundaryGap:true,
+        axisLine:{lineStyle:{color:'#2a2a3a'}},axisTick:{show:false},
+        axisLabel:{show:false}},
+      {type:'category',data:times,gridIndex:2,boundaryGap:true,
+        axisLine:{lineStyle:{color:'#2a2a3a'}},axisTick:{show:false},
+        axisLabel:{show:false}},
+    ],
+    yAxis:[
+      {type:'value',gridIndex:0,min:pctMin,max:pctMax,
+        splitNumber:4,interval:(pctMax-pctMin)/4,
+        splitLine:{lineStyle:{color:'#1e1e30'}},
+        axisLabel:{color:'#555',fontSize:10,
+          formatter:function(v){return v.toFixed(2)+'%';}},
+        axisLine:{onZero:true},axisTick:{onZero:true}},
+      {type:'value',gridIndex:0,position:'right',min:priceMin,max:priceMax,
+        splitNumber:4,interval:(priceMax-priceMin)/4,
+        splitLine:{show:false},
+        axisLabel:{color:'#555',fontSize:10,formatter:function(v){return v.toFixed(2);}}},
+      {scale:true,gridIndex:1,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{show:false}},
+      {scale:true,gridIndex:2,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{color:'#555',fontSize:10}},
+    ],
+    series:[
+      {name:'价格',type:'line',xAxisIndex:0,yAxisIndex:1,data:pricesUp,symbol:'none',
+        lineStyle:{width:1.5,color:UP}},
+      {name:'价格2',type:'line',xAxisIndex:0,yAxisIndex:1,data:pricesDn,symbol:'none',
+        lineStyle:{width:1.5,color:DN}},
+      {name:'MA20',type:'line',xAxisIndex:0,yAxisIndex:1,data:ma20,symbol:'none',
+        lineStyle:{width:1,color:'#f1c40f',type:'dashed'}},
+      {name:'量',type:'bar',xAxisIndex:1,yAxisIndex:2,data:vols},
+      {name:'MACD柱',type:'bar',xAxisIndex:2,yAxisIndex:3,data:hist},
+      {name:'DIF',type:'line',xAxisIndex:2,yAxisIndex:3,data:dif,symbol:'none',lineStyle:{width:1,color:'#f1c40f'}},
+      {name:'DEA',type:'line',xAxisIndex:2,yAxisIndex:3,data:dea,symbol:'none',lineStyle:{width:1,color:'#3498db'}},
+    ],
+  }, true);
+
+  // Reference line at open price (0%)
+  intradayChart.setOption({
+    series:[{yAxisIndex:1,markLine:{silent:true,symbol:'none',lineStyle:{color:'#555',type:'solid',width:1},
+      data:[{yAxis:openPrice}]}}]
+  });
+}
+
+// --- K-line mode (1min / 5min) ---
+function renderIntradayKline(data, refPrice) {
+  const rows = data.data, len = rows.length;
+  if (!len) return;
+
+  const ci = {};
+  data.columns.forEach((c, i) => ci[c] = i);
+
+  const times=[], ohlc=[], vols=[], ma5=[], ma20=[], dif=[], dea=[], hist=[];
+  const openPrice = refPrice || rows[0][ci.open]; // 昨收价 or fallback
+  const allPrices = [];
+
+  for (let i=0; i<len; i++) {
+    const r = rows[i];
+    times[i] = r[ci.time];
+    const o=r[ci.open], c=r[ci.close], h=r[ci.high], l=r[ci.low];
+    ohlc[i]=[o,c,l,h];
+    allPrices.push(o,c,h,l);
+    vols[i]={value:r[ci.volume]||0, itemStyle:{color:c>=o?UP:DN,opacity:.6}};
+    ma5[i]=r[ci.ma5]; ma20[i]=r[ci.ma20];
+    dif[i]=r[ci.macd_dif]; dea[i]=r[ci.macd_dea];
+    hist[i]={value:r[ci.macd_hist], itemStyle:{color:(r[ci.macd_hist]||0)>=0?UP:DN}};
+  }
+
+  // Symmetric range
+  const maxDev = Math.max(
+    Math.max(...allPrices.map(p => Math.abs((p||0) - openPrice))),
+    openPrice * 0.01
+  );
+  const priceMin = openPrice - maxDev;
+  const priceMax = openPrice + maxDev;
+  const pctMin = -maxDev / openPrice * 100;
+  const pctMax = maxDev / openPrice * 100;
+
+  const freqLabel = data.freq === '15' ? '15分K' : '5分K';
+  const is15Min = data.freq === '15';
+
+  intradayChart.setOption({
+    backgroundColor:'#1a1a2e',
+    animation:false,
+    axisPointer:{link:[{xAxisIndex:'all'}]},
+    title:[
+      {text:freqLabel,left:70,top:6,textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
+      {text:'MA5',left:120,top:6,textStyle:{color:'#f1c40f',fontSize:11,fontWeight:'normal'}},
+      {text:'MA20',left:155,top:6,textStyle:{color:'#3498db',fontSize:11,fontWeight:'normal'}},
+      {text:'VOL',left:70,top:'66%',textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
+      {text:'MACD',left:70,top:'81%',textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
+    ],
+    tooltip:{
+      trigger:'axis',
+      axisPointer:{type:'line',lineStyle:{color:'#555',type:'dashed',width:1}},
+      backgroundColor:'rgba(22,33,62,.95)',borderWidth:1,borderColor:'#2a2a4a',
+      padding:[6,10],textStyle:{color:'#e0e0e0',fontSize:12},
+      formatter:function(p){
+        if(!p||!p.length)return'';
+        const i=p[0].dataIndex, r=rows[i];
+        const o=r[ci.open],c=r[ci.close],h=r[ci.high],l=r[ci.low];
+        const pct=((c-openPrice)/openPrice*100);
+        const cls=c>=openPrice?'#e74c3c':'#2ecc71';
+        const s=pct>=0?'+':'';
+        const lb='color:#555;font-size:11px;padding-right:4px';
+        const vl=c2=>`color:${c2||'#bbb'}`;
+        return `<div style="font-size:12px;line-height:1.6;min-width:280px">
+          <div style="padding-bottom:4px;border-bottom:1px solid #2a2a4a;margin-bottom:3px"><b>${r[ci.time]}</b></div>
+          <span style="${lb}">开</span> <span style="${vl()}">${o.toFixed(2)}</span>
+          <span style="${lb}">高</span> <span style="${vl()}">${h.toFixed(2)}</span>
+          <span style="${lb}">低</span> <span style="${vl()}">${l.toFixed(2)}</span><br>
+          <span style="${lb}">收</span> <span style="${vl(cls)}">${c.toFixed(2)}</span>
+          <span style="${lb}">幅</span> <span style="${vl(cls)}">${s}${pct.toFixed(2)}%</span>
+          <span style="${lb}">量</span> <span style="${vl()}">${fmtVol(r[ci.volume])}</span><br>
+          <span style="${lb}">MA5</span> <span style="${vl('#f1c40f')}">${r[ci.ma5]?.toFixed(2)||'-'}</span>
+          <span style="${lb}">MA20</span> <span style="${vl('#3498db')}">${r[ci.ma20]?.toFixed(2)||'-'}</span><br>
+          <span style="${lb}">DIF</span> <span style="${vl('#f1c40f')}">${r[ci.macd_dif]?.toFixed(3)||'-'}</span>
+          <span style="${lb}">DEA</span> <span style="${vl('#3498db')}">${r[ci.macd_dea]?.toFixed(3)||'-'}</span>
+          <span style="${lb}">MACD</span> <span style="${vl((r[ci.macd_hist]||0)>=0?'#e74c3c':'#2ecc71')}">${r[ci.macd_hist]?.toFixed(3)||'-'}</span>
+        </div>`;
+      }
+    },
+    grid:[
+      {left:65,right:65,top:28,bottom:'38%'},
+      {left:65,right:65,top:'67%',height:'10%'},
+      {left:65,right:65,top:'82%',height:'13%'},
+    ],
+    xAxis:[
+      {type:'category',data:times,gridIndex:0,boundaryGap:true,
+        axisLine:{lineStyle:{color:'#2a2a3a'}},axisTick:{show:false},
+        axisLabel:{color:'#555',fontSize:10,interval:is15Min?5:4}},
+      {type:'category',data:times,gridIndex:1,boundaryGap:true,
+        axisLine:{lineStyle:{color:'#2a2a3a'}},axisTick:{show:false},axisLabel:{show:false}},
+      {type:'category',data:times,gridIndex:2,boundaryGap:true,
+        axisLine:{lineStyle:{color:'#2a2a3a'}},axisTick:{show:false},axisLabel:{show:false}},
+    ],
+    yAxis:[
+      {type:'value',gridIndex:0,min:pctMin,max:pctMax,
+        splitNumber:4,interval:(pctMax-pctMin)/4,
+        splitLine:{lineStyle:{color:'#1e1e30'}},
+        axisLabel:{color:'#555',fontSize:10,
+          formatter:function(v){return v.toFixed(2)+'%';}},
+        axisLine:{onZero:true},axisTick:{onZero:true}},
+      {type:'value',gridIndex:0,position:'right',min:priceMin,max:priceMax,
+        splitNumber:4,interval:(priceMax-priceMin)/4,
+        splitLine:{show:false},
+        axisLabel:{color:'#555',fontSize:10,formatter:function(v){return v.toFixed(2);}}},
+      {scale:true,gridIndex:1,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{show:false}},
+      {scale:true,gridIndex:2,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{color:'#555',fontSize:10}},
+    ],
+    dataZoom: [],
+    series:[
+      {name:'K线',type:'candlestick',xAxisIndex:0,yAxisIndex:1,data:ohlc,
+        itemStyle:{color:UP,color0:DN,borderColor:UP,borderColor0:DN}},
+      {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:1,data:ma5,symbol:'none',lineStyle:{width:1,color:'#f1c40f'}},
+      {name:'MA20',type:'line',xAxisIndex:0,yAxisIndex:1,data:ma20,symbol:'none',lineStyle:{width:1,color:'#3498db'}},
+      {name:'量',type:'bar',xAxisIndex:1,yAxisIndex:2,data:vols},
+      {name:'MACD柱',type:'bar',xAxisIndex:2,yAxisIndex:3,data:hist},
+      {name:'DIF',type:'line',xAxisIndex:2,yAxisIndex:3,data:dif,symbol:'none',lineStyle:{width:1,color:'#f1c40f'}},
+      {name:'DEA',type:'line',xAxisIndex:2,yAxisIndex:3,data:dea,symbol:'none',lineStyle:{width:1,color:'#3498db'}},
+    ],
+  }, true);
+}
+
+// Mode switching
+const switchMode = debounce(async function(mode) {
+  if (mode === intradayMode) return;
+  intradayMode = mode;
+  updateModeButtons();
+  await loadAndRenderIntraday();
+}, 400);
+
+// Close modal
+function closeIntraday() {
+  document.getElementById('intradayModal').classList.remove('active');
+  if (intradayChart) { intradayChart.dispose(); intradayChart = null; }
+  intradayCache = {};
+}
+
+document.getElementById('intradayClose').addEventListener('click', debounce(closeIntraday, 300));
+
+// Keyboard: ESC close, Left/Right switch date
+document.addEventListener('keydown', function(e) {
+  const modal = document.getElementById('intradayModal');
+  if (!modal.classList.contains('active')) return;
+
+  if (e.key === 'Escape') {
+    closeIntraday();
+    return;
+  }
+
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    const delta = e.key === 'ArrowLeft' ? -1 : 1;
+    const newIdx = intradayDateIndex + delta;
+    if (newIdx < 0 || newIdx >= intradayDates.length) return;
+    intradayDateIndex = newIdx;
+    updateIntradayTitle();
+    loadAndRenderIntraday();
+    return;
   }
 });
 

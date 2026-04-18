@@ -1,6 +1,7 @@
 """Flask backend for A-share stock data visualization."""
 
 import sys
+import atexit
 import threading
 from pathlib import Path
 
@@ -10,13 +11,16 @@ from flask import Flask, jsonify, request, send_from_directory
 import pandas as pd
 import pyarrow.parquet as pq
 
+from stock_data.bs_manager import bs_shutdown
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "stocks"
 
 app = Flask(__name__, static_folder="static", static_url_path="")
+atexit.register(bs_shutdown)
 
 # Pre-build stock index on startup
 _stock_index: dict = {}
-_update_status = {"running": False, "message": ""}
+_update_status = {"running": False, "message": "", "current": 0, "total": 0, "code": ""}
 
 
 def build_stock_index():
@@ -104,6 +108,37 @@ def api_stock(code):
     return jsonify({"columns": cols, "data": df.values.tolist()})
 
 
+@app.route("/api/intraday/<code>/<date>")
+def api_intraday(code, date):
+    """Return minute-level intraday data for a stock on a specific date.
+
+    Query params: freq=5 (default) or freq=1
+    """
+    code = code.zfill(6)
+    freq = request.args.get("freq", "5")
+    if freq not in ("5", "15"):
+        return jsonify({"error": f"Invalid freq '{freq}', must be 5 or 15"}), 400
+
+    # Validate date format
+    try:
+        pd.Timestamp(date)
+    except Exception:
+        return jsonify({"error": f"Invalid date format: {date}"}), 400
+
+    from stock_data.intraday_fetcher import get_intraday_data
+    df = get_intraday_data(code, date.replace("-", ""), freq)
+    if df is None or df.empty:
+        return jsonify({"error": f"暂无 {code} 在 {date} 的分时数据"}), 404
+
+    cols = ["time", "open", "close", "high", "low", "volume", "amount",
+            "ma5", "ma20", "macd_dif", "macd_dea", "macd_hist"]
+    cols = [c for c in cols if c in df.columns]
+    df = df[cols]
+    df = df.astype(object).where(df.notna(), None)
+    return jsonify({"columns": cols, "data": df.values.tolist(),
+                     "date": date, "code": code, "freq": freq})
+
+
 @app.route("/api/update", methods=["POST"])
 def api_update():
     """Trigger incremental data update in background."""
@@ -113,12 +148,22 @@ def api_update():
     def run_update():
         _update_status["running"] = True
         _update_status["message"] = "正在更新..."
+        _update_status["current"] = 0
+        _update_status["total"] = 0
+        _update_status["code"] = ""
         try:
             from stock_data.update import update_all, fetch_new_listings
-            update_all()
+
+            def on_progress(current, total, code):
+                _update_status["current"] = current
+                _update_status["total"] = total
+                _update_status["code"] = code
+                _update_status["message"] = f"更新中 {current}/{total} - {code}"
+
+            update_all(progress_cb=on_progress)
             fetch_new_listings()
             build_stock_index()
-            _update_status["message"] = f"更新完成，共 {_update_status.get('count', 0)} 只股票"
+            _update_status["message"] = f"更新完成，共 {len(_stock_index)} 只股票"
         except Exception as e:
             _update_status["message"] = f"更新失败: {e}"
         finally:

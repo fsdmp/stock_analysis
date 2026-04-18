@@ -8,6 +8,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data" / "stocks"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+INTRADAY_DIR = BASE_DIR / "data" / "intraday"
+INTRADAY_DIR.mkdir(parents=True, exist_ok=True)
 
 # === Date Range ===
 # Default: past 5 years from today
@@ -30,6 +32,12 @@ MACD_SIGNAL = 9
 KDJ_N = 9
 KDJ_M1 = 3
 KDJ_M2 = 3
+
+# === Intraday ===
+INTRADAY_FIELDS = "date,time,open,high,low,close,volume,amount"
+
+# === Multiprocessing ===
+BATCH_WORKERS = 4  # Number of worker processes for batch operations
 
 # === Rate Limiting ===
 # Seconds between requests to avoid being blocked

@@ -29,6 +29,22 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
 .btn-update.running { background: #e94560; color: #fff; }
 .status { font-size: 12px; color: #888; }
 
+/* Progress bar */
+.progress-wrap {
+  display: none; margin: 0 24px; padding: 10px 0;
+}
+.progress-wrap.active { display: block; }
+.progress-bar-bg {
+  height: 8px; background: #0f3460; border-radius: 4px; overflow: hidden;
+}
+.progress-bar {
+  height: 100%; width: 0; background: linear-gradient(90deg, #e94560, #ff6b6b);
+  border-radius: 4px; transition: width .3s;
+}
+.progress-text {
+  font-size: 12px; color: #888; margin-top: 4px;
+}
+
 /* Stats bar */
 .stats {
   display: flex; gap: 24px; padding: 10px 24px; background: #16213e;
@@ -76,6 +92,11 @@ tr:hover td { background: #16213e; }
 </div>
 
 <div class="stats" id="stats"></div>
+
+<div class="progress-wrap" id="progressWrap">
+  <div class="progress-bar-bg"><div class="progress-bar" id="progressBar"></div></div>
+  <div class="progress-text" id="progressText"></div>
+</div>
 
 <div class="table-wrap">
   <table>
@@ -133,6 +154,7 @@ function go(p) { page = p; load(); window.scrollTo(0,0); }
 
 // Update
 async function triggerUpdate() {
+  if (!confirm('确认更新所有股票数据？更新期间可能会持续较长时间。')) return;
   const btn = document.getElementById('updateBtn');
   btn.classList.add('running');
   btn.textContent = '更新中...';
@@ -145,16 +167,28 @@ async function pollStatus() {
   const s = await resp.json();
   const el = document.getElementById('status');
   const btn = document.getElementById('updateBtn');
+  const pw = document.getElementById('progressWrap');
+  const pb = document.getElementById('progressBar');
+  const pt = document.getElementById('progressText');
   if (s.running) {
-    el.textContent = '正在更新数据...';
+    el.textContent = s.message || '正在更新数据...';
     btn.classList.add('running');
     btn.textContent = '更新中...';
-    setTimeout(pollStatus, 2000);
+    pw.classList.add('active');
+    if (s.total > 0) {
+      const pct = Math.round(s.current / s.total * 100);
+      pb.style.width = pct + '%';
+      pt.textContent = `${s.current} / ${s.total}（${pct}%）- 当前: ${s.code}`;
+    }
+    setTimeout(pollStatus, 1000);
   } else {
     el.textContent = s.message || '就绪';
     btn.classList.remove('running');
     btn.textContent = '更新数据';
-    if (!s.running) load(); // refresh list
+    pw.classList.remove('active');
+    pb.style.width = '0';
+    pt.textContent = '';
+    load();
   }
 }
 

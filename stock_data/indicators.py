@@ -90,3 +90,17 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = calc_kdj(df)
     df = calc_volume_indicators(df)
     return df
+
+
+def add_intraday_indicators(df: pd.DataFrame, ma_periods: list[int] | None = None) -> pd.DataFrame:
+    """Calculate indicators for intraday minute data.
+
+    Adds MA lines (default MA5, MA20) and MACD.
+    Does NOT calculate KDJ or OBV (not meaningful on intraday scale).
+    """
+    if ma_periods is None:
+        ma_periods = [5, 20]
+    df = df.sort_values("time").reset_index(drop=True)
+    df = calc_ma(df, periods=ma_periods)
+    df = calc_macd(df)
+    return df
