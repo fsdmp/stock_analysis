@@ -1,6 +1,7 @@
 """Flask backend for A-share stock data visualization."""
 
 import sys
+import json
 import atexit
 import threading
 from pathlib import Path
@@ -14,7 +15,8 @@ import pyarrow.parquet as pq
 from stock_data.bs_manager import bs_shutdown
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "stocks"
-
+CACHE_DIR = Path(__file__).resolve().parent.parent / "data"
+STOCK_NAMES_CACHE = CACHE_DIR / "stock_names.json"
 app = Flask(__name__, static_folder="static", static_url_path="")
 atexit.register(bs_shutdown)
 
@@ -24,14 +26,30 @@ _stock_names: dict = {}  # code -> name mapping
 _update_status = {"running": False, "message": "", "current": 0, "total": 0, "code": ""}
 
 
-def build_stock_names():
-    """Fetch stock code-to-name mapping from baostock."""
+def build_stock_names(use_cache=True):
+    """Load stock code-to-name mapping, preferring local
+       cache."""
     global _stock_names
+     
+    # Try loading from cache first
+    if use_cache and STOCK_NAMES_CACHE.exists():
+        try:
+            with open(STOCK_NAMES_CACHE, "r", encoding="utf-8") as f:
+                 _stock_names = json.load(f)
+            print(f"Loaded {len(_stock_names)} stock names from cache")
+            return
+        except Exception as e:
+            print(f"Warning: cache read failed: {e}")
+    
+    # Fallback: fetch from baostock
     try:
         from stock_data.fetcher import get_mainboard_stocks
         df = get_mainboard_stocks()
         _stock_names = dict(zip(df["code"], df["name"]))
-        print(f"Loaded {len(_stock_names)} stock names")
+        # Save to cache for next startup
+        with open(STOCK_NAMES_CACHE, "w", encoding="utf-8") as f:
+            json.dump(_stock_names, f, ensure_ascii=False)
+        print(f"Loaded {len(_stock_names)} stock names and saved cache")
     except Exception as e:
         print(f"Warning: failed to load stock names: {e}")
         _stock_names = {}
@@ -177,6 +195,7 @@ def api_update():
 
             update_all(progress_cb=on_progress)
             fetch_new_listings()
+            build_stock_names(use_cache=False)
             build_stock_index()
             _update_status["message"] = f"更新完成，共 {len(_stock_index)} 只股票"
         except Exception as e:
