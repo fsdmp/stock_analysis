@@ -48,7 +48,17 @@
   - [量价背离过滤](#量价背离过滤)
   - [信号去重（Dedup）](#信号去重dedup)
 - [API 接口](#api-接口)
+  - [GET /api/stocks — 股票列表](#get-apistocks--股票列表)
+  - [GET /api/stock/code — K线数据](#get-apistockcode--单只股票k线数据)
+  - [GET /api/analysis/code — 分析结果](#get-apianalysiscode--分析结果)
+  - [GET /api/intraday/code/date — 分时数据](#get-apiintradaycodedate--分时数据)
+  - [POST /api/update — 触发更新](#post-apiupdate--触发增量更新)
+  - [GET /api/update/status — 更新进度](#get-apiupdatestatus--查询更新进度)
 - [数据存储](#数据存储)
+  - [日K线数据（27列）](#日k线数据)
+  - [分时数据（12列）](#分时数据)
+  - [股票名称缓存](#股票名称缓存)
+  - [拉取摘要](#拉取摘要)
 - [依赖说明](#依赖说明)
 - [配置参数](#配置参数)
 
@@ -959,6 +969,8 @@ MACD 交叉信号要求 HIST 柱状图正在扩张：
 
 ## API 接口
 
+### 接口总览
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/` | 首页（股票列表） |
@@ -970,87 +982,491 @@ MACD 交叉信号要求 HIST 柱状图正在扩张：
 | POST | `/api/update` | 触发后台增量更新 |
 | GET | `/api/update/status` | 查询更新进度 |
 
-**示例请求：**
+---
 
-```bash
-# 搜索包含"茅台"的股票
-curl "http://localhost:8080/api/stocks?q=茅台&page=1&size=10"
+### GET `/api/stocks` — 股票列表
 
-# 获取贵州茅台日K数据
-curl "http://localhost:8080/api/stock/600519"
+**参数：**
 
-# 获取分析结果（支撑阻力 + 信号）
-curl "http://localhost:8080/api/analysis/600519"
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| q | string | "" | 搜索关键词（匹配代码或名称） |
+| page | int | 1 | 页码 |
+| size | int | 50 | 每页条数 |
 
-# 获取 2024-03-15 的 5 分钟分时数据
-curl "http://localhost:8080/api/intraday/600519/2024-03-15?freq=5"
+**响应结构：**
 
-# 触发数据更新
-curl -X POST "http://localhost:8080/api/update"
+```json
+{
+  "total": 3098,
+  "page": 1,
+  "size": 50,
+  "data": [
+    {
+      "code": "000001",
+      "name": "平安银行",
+      "close": 12.35,
+      "pct_change": 1.23,
+      "date": "2026-04-18"
+    }
+  ]
+}
 ```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| total | int | 匹配的股票总数 |
+| page | int | 当前页码 |
+| size | int | 每页条数 |
+| data[].code | string | 6 位股票代码 |
+| data[].name | string | 股票名称 |
+| data[].close | float | 最新收盘价 |
+| data[].pct_change | float | 最新涨跌幅（%） |
+| data[].date | string | 最新交易日期（YYYY-MM-DD） |
+
+---
+
+### GET `/api/stock/<code>` — 单只股票K线数据
+
+**参数：**
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| start | string | 无 | 起始日期（YYYY-MM-DD） |
+| end | string | 无 | 截止日期（YYYY-MM-DD） |
+
+**响应结构：**
+
+```json
+{
+  "columns": ["date", "open", "close", "high", "low", "volume", "pct_change",
+              "ma5", "ma7", "ma10", "ma20",
+              "macd_dif", "macd_dea", "macd_hist",
+              "kdj_k", "kdj_d", "kdj_j"],
+  "data": [
+    ["2026-04-18", 1675.0, 1680.0, 1688.5, 1672.0, 23456789, 1.23,
+     1670.5, 1668.2, 1665.0, 1658.3,
+     5.2341, 3.8912, 2.6858,
+     72.351, 65.128, 86.797],
+    ...
+  ],
+  "name": "贵州茅台"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| columns | string[] | 列名数组，与 data 中每行数组一一对应 |
+| data | any[][] | 数据行数组，每行为一个交易日的全部字段 |
+| name | string | 股票名称 |
+
+**columns 各列含义：**
+
+| 索引 | 列名 | 类型 | 说明 |
+|------|------|------|------|
+| 0 | date | string | 交易日期 YYYY-MM-DD |
+| 1 | open | float/null | 开盘价 |
+| 2 | close | float/null | 收盘价 |
+| 3 | high | float/null | 最高价 |
+| 4 | low | float/null | 最低价 |
+| 5 | volume | int/null | 成交量（股） |
+| 6 | pct_change | float/null | 涨跌幅（%） |
+| 7 | ma5 | float/null | 5 日均线 |
+| 8 | ma7 | float/null | 7 日均线 |
+| 9 | ma10 | float/null | 10 日均线 |
+| 10 | ma20 | float/null | 20 日均线 |
+| 11 | macd_dif | float/null | MACD DIF（差离值） |
+| 12 | macd_dea | float/null | MACD DEA（信号线） |
+| 13 | macd_hist | float/null | MACD 柱状图 |
+| 14 | kdj_k | float/null | KDJ K 值 |
+| 15 | kdj_d | float/null | KDJ D 值 |
+| 16 | kdj_j | float/null | KDJ J 值 |
+
+> NaN 值在 JSON 中序列化为 null。
+
+---
+
+### GET `/api/analysis/<code>` — 分析结果
+
+**参数：**
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| start | string | 无 | 起始日期（YYYY-MM-DD） |
+| end | string | 无 | 截止日期（YYYY-MM-DD） |
+
+**响应结构：**
+
+```json
+{
+  "zones": {
+    "resistance": [
+      {"low": 1850.32, "high": 1872.56, "score": 78, "status": "trap", "tag": "假突破2次"}
+    ],
+    "support": [
+      {"low": 1620.00, "high": 1635.50, "score": 65, "status": "normal", "tag": ""}
+    ]
+  },
+  "signals": {
+    "ma": [
+      {"d": "2026-04-10", "v": 1670.5, "g": 1, "nm": "5/10"}
+    ],
+    "macd": [
+      {"d": "2026-04-08", "v": 3.89, "g": 1}
+    ],
+    "macdDiv": [],
+    "kdj": [
+      {"d": "2026-04-12", "v": 25.3, "g": 1}
+    ],
+    "kdjExt": [
+      {"d": "2026-04-14", "v": 82.5, "g": 1, "dh": 0}
+    ],
+    "vol": [
+      {"d": "2026-04-15", "v": 56789012, "g": 1}
+    ],
+    "squeeze": [
+      {"d": "2026-04-16", "v": 1680.0, "g": 1}
+    ],
+    "volPrice": []
+  }
+}
+```
+
+**zones（支撑阻力区）字段说明：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| low | float | 区间下沿价格 |
+| high | float | 区间上沿价格 |
+| score | int | 综合评分（0~100），越高表示该价位越关键 |
+| status | string | 状态：`normal`（正常）、`trap`（假突破陷阱）、`broken`（已失效） |
+| tag | string | 附加标签：`"假突破N次"`、`"背离"`、`"失效"`、`""`（无） |
+
+**signals（交易信号）字段说明：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| d | string | 信号触发日期 YYYY-MM-DD |
+| v | float | 信号关联值（价格/指标值/成交量） |
+| g | int | 方向：`1`=看多，`0`=看空，`-1`=看空（备用），`3`=天量 |
+| nm | string | 仅 MA 信号，交叉的均线对（`"5/10"` 或 `"10/20"`） |
+| dh | int | 仅 KDJ 极端信号，`0`=首次进入，`1`=钝化（连续 5 日+） |
+
+**signals 各类别含义：**
+
+| 键 | 含义 | g 值对照 |
+|------|------|---------|
+| ma | MA 均线交叉 | 1=金叉（看多），0=死叉（看空） |
+| macd | MACD 交叉 | 1=DIF 上穿 DEA，0=DIF 下穿 DEA |
+| macdDiv | MACD 背离 | 1=顶背离（看空信号），0=底背离（看多信号） |
+| kdj | KDJ 交叉 | 1=K 上穿 D，0=K 下穿 D |
+| kdjExt | KDJ 超买超卖/钝化 | 1=超买区，0=超卖区；dh=0 首次，dh=1 钝化 |
+| vol | 量能异动 | 3=天量，1=巨量，0=地量 |
+| squeeze | 均线收敛 | 1=看多变盘，-1=看空变盘，0=中性 |
+| volPrice | 量价背离 | 1=顶部背离（看空），0=底部背离（看多） |
+
+> resistance 和 support 数组最多各 3 个元素，按 score 降序排列。
+
+---
+
+### GET `/api/intraday/<code>/<date>` — 分时数据
+
+**参数：**
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| code | path | — | 6 位股票代码 |
+| date | path | — | 日期（YYYY-MM-DD） |
+| freq | query | "5" | K线周期：`"5"`=5分钟，`"15"`=15分钟 |
+
+**响应结构：**
+
+```json
+{
+  "columns": ["time", "open", "close", "high", "low", "volume", "amount",
+              "ma5", "ma20", "macd_dif", "macd_dea", "macd_hist"],
+  "data": [
+    ["09:30", 1680.0, 1682.0, 1683.5, 1679.0, 1234567, 2073000000.0,
+     null, null, null, null, null],
+    ["09:35", 1682.0, 1681.0, 1684.0, 1680.5, 987654, 1660000000.0,
+     1681.5, null, null, null, null],
+    ["09:40", 1681.0, 1683.0, 1684.0, 1680.0, 876543, 1473000000.0,
+     1682.0, null, null, null, null]
+  ],
+  "date": "2026-04-18",
+  "code": "600519",
+  "freq": "5"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| columns | string[] | 列名数组 |
+| data | any[][] | 分时数据行 |
+| date | string | 请求的日期 |
+| code | string | 股票代码 |
+| freq | string | K线周期 |
+
+**columns 各列含义：**
+
+| 索引 | 列名 | 类型 | 说明 |
+|------|------|------|------|
+| 0 | time | string | 时间 HH:MM（如 "09:35"） |
+| 1 | open | float | 开盘价 |
+| 2 | close | float | 收盘价 |
+| 3 | high | float | 最高价 |
+| 4 | low | float | 最低价 |
+| 5 | volume | int | 成交量（股） |
+| 6 | amount | float | 成交额（元） |
+| 7 | ma5 | float/null | 5 周期均线（前 4 根为 null） |
+| 8 | ma20 | float/null | 20 周期均线（前 19 根为 null） |
+| 9 | macd_dif | float/null | MACD DIF |
+| 10 | macd_dea | float/null | MACD DEA |
+| 11 | macd_hist | float/null | MACD 柱状图 |
+
+> 分时数据不计算 KDJ 和 OBV（分钟级别意义不大）。5 分钟K线 A 股一日约 48 根（9:30~11:30, 13:00~15:00）。
+
+---
+
+### POST `/api/update` — 触发增量更新
+
+**请求：** 无请求体
+
+**响应：**
+
+```json
+// 成功启动
+{"status": "started", "message": "更新已启动"}
+
+// 已有更新在运行
+{"status": "already_running", "message": "更新正在进行中"}
+```
+
+---
+
+### GET `/api/update/status` — 查询更新进度
+
+**响应结构：**
+
+```json
+{
+  "running": true,
+  "message": "更新中 1500/3098 - 600519",
+  "current": 1500,
+  "total": 3098,
+  "code": "600519",
+  "count": 3098
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| running | bool | 是否正在更新 |
+| message | string | 进度描述文本 |
+| current | int | 已处理的股票数 |
+| total | int | 需更新的总股票数 |
+| code | string | 当前正在处理的股票代码 |
+| count | int | 当前索引中的股票总数 |
 
 ---
 
 ## 数据存储
 
-### 日K数据
+### 目录总览
 
 ```
-data/stocks/{CODE}.parquet
+data/
+├── stocks/                          # 日K线数据
+│   ├── 000001.parquet               # 平安银行
+│   ├── 000858.parquet               # 五粮液
+│   ├── 600519.parquet               # 贵州茅台
+│   └── ...                          # 约 3000 个文件
+├── intraday/                        # 分时数据缓存
+│   ├── 000001/
+│   │   ├── 20260418_5min.parquet
+│   │   └── 20260418_15min.parquet
+│   └── 600519/
+│       └── 20260418_5min.parquet
+├── stock_names.json                 # 股票代码-名称映射
+└── fetch_summary.csv                # 最近一次全量拉取的摘要
 ```
 
-每只股票一个 Parquet 文件，列包括：
+---
 
-| 列名 | 类型 | 说明 |
-|------|------|------|
-| date | datetime64 | 交易日期 |
-| code | string | 6位股票代码 |
-| open / close / high / low | float64 | 开收高低价 |
-| volume | Int64 | 成交量（股，非手） |
-| amount | float64 | 成交额（元） |
-| pct_change | float64 | 涨跌幅（%） |
-| turnover | float64 | 换手率（%） |
-| ma5 / ma7 / ma10 / ma20 | float64 | 收盘价均线 |
-| v_ma5 / v_ma7 / v_ma10 / v_ma20 | float64 | 成交量均线 |
-| macd_dif / macd_dea / macd_hist | float64 | MACD 三线 |
-| kdj_k / kdj_d / kdj_j | float64 | KDJ 三线 |
-| obv | int64 | OBV 能量潮 |
-| vol_ratio | float64 | 量比 |
+### 日K线数据
 
-复权方式：前复权（adjustflag=2）
+**文件路径**: `data/stocks/{CODE}.parquet`
+
+**文件命名**: 6 位股票代码，如 `600519.parquet`、`000001.parquet`
+
+**复权方式**: 前复权（adjustflag=2）
+
+**完整列定义（27 列）：**
+
+| # | 列名 | 类型 | 说明 | 取值范围 / 示例 |
+|---|------|------|------|----------------|
+| 1 | date | datetime64 | 交易日期 | 2021-04-19 ~ 2026-04-18 |
+| 2 | code | string | 6 位股票代码 | "600519" |
+| 3 | open | float64 | 开盘价（元） | 1680.0 |
+| 4 | close | float64 | 收盘价（元） | 1685.5 |
+| 5 | high | float64 | 最高价（元） | 1690.0 |
+| 6 | low | float64 | 最低价（元） | 1675.0 |
+| 7 | volume | Int64 | 成交量（股，非手） | 23456789 |
+| 8 | amount | float64 | 成交额（元） | 39520000000.0 |
+| 9 | pct_change | float64 | 涨跌幅（%） | 1.23 |
+| 10 | turnover | float64 | 换手率（%） | 0.87 |
+| 11 | ma5 | float64 | 5 日收盘价均线 | 1680.333 |
+| 12 | v_ma5 | float64 | 5 日成交量均值 | 23456789.0 |
+| 13 | ma7 | float64 | 7 日收盘价均线 | 1678.571 |
+| 14 | v_ma7 | float64 | 7 日成交量均值 | 22345678.0 |
+| 15 | ma10 | float64 | 10 日收盘价均线 | 1675.200 |
+| 16 | v_ma10 | float64 | 10 日成交量均值 | 21345678.0 |
+| 17 | ma20 | float64 | 20 日收盘价均线 | 1670.150 |
+| 18 | v_ma20 | float64 | 20 日成交量均值 | 20345678.0 |
+| 19 | macd_dif | float64 | MACD DIF（快慢线差值） | 5.2341 |
+| 20 | macd_dea | float64 | MACD DEA（DIF 的信号线） | 3.8912 |
+| 21 | macd_hist | float64 | MACD 柱状图 = 2*(DIF-DEA) | 2.6858 |
+| 22 | kdj_k | float64 | KDJ K 值 | 72.351 |
+| 23 | kdj_d | float64 | KDJ D 值 | 65.128 |
+| 24 | kdj_j | float64 | KDJ J 值（= 3K - 2D） | 86.797 |
+| 25 | obv | int64 | OBV 能量潮（累积值） | 1234567890 |
+| 26 | vol_ratio | float64 | 量比（当日量/MA5量） | 1.352 |
+
+**列排列顺序**：date → code → K线基础（open/close/high/low/volume/amount/pct_change/turnover）→ 均线（ma5/v_ma5/ma7/v_ma7/ma10/v_ma10/ma20/v_ma20）→ MACD（macd_dif/macd_dea/macd_hist）→ KDJ（kdj_k/kdj_d/kdj_j）→ 量能（obv/vol_ratio）
+
+**特殊值处理：**
+- 停牌日：volume 为 0 或 NaN，amount/turnover 可能为 NaN
+- 首日指标：均线首日（不足 min_periods）使用已有数据计算，MACD/KDJ 起始值固定
+- NaN 在 Parquet 中存储为 null，读取后为 `pd.NA` 或 `np.nan`
+
+**数据行示例（用 Python 查看）：**
+```python
+from stock_data.reader import load_stock
+df = load_stock("600519")
+print(df.iloc[-1])  # 最新一日
+# date         2026-04-18 00:00:00
+# code                       600519
+# open                        1675.0
+# close                       1680.0
+# high                        1688.5
+# low                         1672.0
+# volume                    23456789
+# amount                  3.952e+10
+# pct_change                    1.23
+# turnover                     0.87
+# ma5                       1670.333
+# v_ma5                   2.346e+07
+# ...
+```
+
+---
 
 ### 分时数据
 
-```
-data/intraday/{CODE}/{DATE}_{freq}min.parquet
-```
+**文件路径**: `data/intraday/{CODE}/{DATE}_{freq}min.parquet`
 
-缓存策略：
-- 历史日期：有缓存即用
-- 当日数据：仅 15:00（收盘）后更新缓存
-- 使用 FileLock 防止并发写入
+**命名规则**:
+- `{CODE}`: 6 位股票代码目录，如 `600519/`
+- `{DATE}`: YYYYMMDD 格式日期，如 `20260418`
+- `{freq}`: `5`（5 分钟）或 `15`（15 分钟）
+- 示例: `data/intraday/600519/20260418_5min.parquet`
+
+**完整列定义（12 列）：**
+
+| # | 列名 | 类型 | 说明 | 示例 |
+|---|------|------|------|------|
+| 1 | time | string | 时间 HH:MM | "09:35" |
+| 2 | open | float64 | 开盘价 | 1680.0 |
+| 3 | close | float64 | 收盘价 | 1682.0 |
+| 4 | high | float64 | 最高价 | 1683.5 |
+| 5 | low | float64 | 最低价 | 1679.0 |
+| 6 | volume | Int64 | 成交量（股） | 1234567 |
+| 7 | amount | float64 | 成交额（元） | 2073000000.0 |
+| 8 | ma5 | float64 | 5 周期均线 | 1681.5 |
+| 9 | ma20 | float64 | 20 周期均线 | 1678.3 |
+| 10 | macd_dif | float64 | MACD DIF | 0.1523 |
+| 11 | macd_dea | float64 | MACD DEA | 0.0891 |
+| 12 | macd_hist | float64 | MACD 柱状图 | 0.1264 |
+
+> 注意：分时数据 **不计算** KDJ 和 OBV（分钟级别无意义）。
+
+**数据行数**:
+- 5 分钟K线: 每个交易日约 48 行（9:30~11:30 共 24 根，13:00~15:00 共 24 根）
+- 15 分钟K线: 每个交易日约 16 行
+
+**缓存策略:**
+- 历史日期: 首次拉取后缓存，后续直接读文件
+- 当日数据: 仅 15:00（A 股收盘）后才写入缓存，盘中每次重新拉取
+- 并发安全: 使用 `FileLock` 防止多请求同时写入
+
+---
 
 ### 股票名称缓存
 
-```
-data/stock_names.json
+**文件路径**: `data/stock_names.json`
+
+**格式**: JSON 对象，key 为 6 位股票代码，value 为股票名称
+
+```json
+{
+  "000001": "平安银行",
+  "000002": "万科A",
+  "000858": "五粮液",
+  "600519": "贵州茅台",
+  ...
+}
 ```
 
-JSON 格式的 `{"600519": "贵州茅台", ...}` 映射表，启动时优先加载缓存，避免每次查询 API。
+**更新时机**: 启动时加载，全量更新后重建。首次启动从 baostock 拉取，后续优先读缓存。
+
+---
+
+### 拉取摘要
+
+**文件路径**: `data/fetch_summary.csv`
+
+每次运行 `python3 -m stock_data.fetcher` 全量拉取后自动生成，记录每只股票的拉取状态：
+
+| 列名 | 类型 | 说明 |
+|------|------|------|
+| code | string | 股票代码 |
+| name | string | 股票名称 |
+| status | string | 状态：`ok`（成功）、`skipped`（跳过）、`no_data`（无数据）、`error`（失败） |
+| rows | int | 获取到的数据行数 |
+
+```csv
+code,name,status,rows
+600519,贵州茅台,ok,1218
+000001,平安银行,ok,1218
+688001,...,no_data,0
+```
 
 ---
 
 ## 依赖说明
 
-```
-akshare>=1.14.0     # A股数据接口（备用数据源）
-pandas>=2.0.0       # 数据处理框架
-numpy>=1.24.0       # 数值计算
-pyarrow>=14.0.0     # Parquet 文件读写
-tqdm>=4.65.0        # 进度条显示
-filelock>=3.12.0    # 文件锁（分时数据缓存）
-baostock            # 主数据源（需单独安装）
-flask               # Web 框架（需单独安装）
+### 核心依赖（requirements.txt）
+
+| 包 | 版本 | 用途 |
+|---|------|------|
+| akshare | >=1.14.0 | A 股数据接口（备用数据源） |
+| pandas | >=2.0.0 | 数据处理框架（DataFrame 操作） |
+| numpy | >=1.24.0 | 数值计算（MA/MACD/KDJ 算法底层） |
+| pyarrow | >=14.0.0 | Parquet 文件读写引擎 |
+| tqdm | >=4.65.0 | 命令行进度条（批量拉取/更新时显示） |
+| filelock | >=3.12.0 | 文件锁（分时数据并发写入保护） |
+
+### 额外依赖（需手动安装）
+
+| 包 | 用途 | 安装 |
+|---|------|------|
+| baostock | 主数据源（A股历史K线、分时数据） | `pip install baostock` |
+| flask | Web 框架（后端 API + 页面服务） | `pip install flask` |
+
+### 一键安装
+
+```bash
+pip install -r requirements.txt baostock flask
 ```
 
 ---
