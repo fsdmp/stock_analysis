@@ -268,6 +268,255 @@ function renderInfo() {
     g('K', d.k?.toFixed(3)||'-','#f1c40f') + g('D', d.d?.toFixed(3)||'-','#3498db') + g('J', d.j?.toFixed(3)||'-','#e74c3c');
 }
 
+// === Support/Resistance Zone Calculation (Multi-Factor + Anti-Trap Rules) ===
+function calcSR(rows) {
+  const len = rows.length;
+  if (len < 20) return {resistance:[], support:[]};
+  const lb = Math.min(120, len), si = len - lb;
+  const cp = R(rows, len-1).close;
+  if (!cp || cp <= 0) return {resistance:[], support:[]};
+
+  // --- Pre-compute ATR, volume averages, noisy bar flags ---
+  let atrS = 0, atrN = 0;
+  const va = new Array(len).fill(0);   // 5-day average volume
+  const noisy = new Array(len).fill(false); // Rule 5: quant noise
+  for (let i = si; i < len; i++) {
+    if (i > si) {
+      const d = R(rows, i), dp = R(rows, i-1);
+      atrS += Math.max(d.high-d.low, Math.abs(d.high-dp.close), Math.abs(d.low-dp.close));
+      atrN++;
+    }
+    let vs = 0, vc = 0;
+    for (let j = Math.max(si, i-5); j < i; j++) {
+      const vj = R(rows, j).vol || 0;
+      if (vj > 0) { vs += vj; vc++; }
+    }
+    va[i] = vc > 0 ? vs / vc : 0;
+  }
+  const atr = atrN > 0 ? atrS / atrN : cp * 0.02;
+
+  // Rule 5: Mark quant noise bars (huge range + tiny volume)
+  for (let i = si; i < len; i++) {
+    const d = R(rows, i);
+    noisy[i] = (d.high - d.low) > atr * 3 && va[i] > 0 && (d.vol || 0) < va[i] * 0.7;
+  }
+
+  const pts = [];
+
+  // --- Factor 1: Local High/Low (Rule 1 close-based + Rule 5 noise filter) ---
+  for (let i = si + 2; i < len; i++) {
+    if (noisy[i]) continue; // Rule 5
+    const d = R(rows, i);
+    const isRecent = i >= len - 10;
+    const N = isRecent ? 2 : 5;
+    const bwd = Math.min(N, i - si), fwd = Math.min(N, len - 1 - i);
+    let hi = true, lo = true;
+    for (let j = i - bwd; j <= i + fwd; j++) {
+      if (j === i) continue;
+      const dj = R(rows, j);
+      if (dj.high >= d.high) hi = false;
+      if (dj.low <= d.low) lo = false;
+    }
+    const base = (!isRecent && bwd >= 5 && fwd >= 5) ? 15 : 10;
+    const br = d.high - d.low;
+    if (hi) {
+      // Rule 1: full score if close is near high (top 30% of bar), half if just wick
+      const sc = br > 0 && (d.high - d.close) / br < 0.3 ? base : Math.round(base * 0.5);
+      pts.push({p: d.high, s: sc});
+    }
+    if (lo) {
+      const sc = br > 0 && (d.close - d.low) / br < 0.3 ? base : Math.round(base * 0.5);
+      pts.push({p: d.low, s: sc});
+    }
+  }
+
+  // --- Factor 2: Moving Averages ---
+  const lt = R(rows, len-1);
+  if (lt.ma5)  pts.push({p: lt.ma5,  s: 12});
+  if (lt.ma10) pts.push({p: lt.ma10, s: 18});
+  if (lt.ma20) pts.push({p: lt.ma20, s: 30});
+
+  // --- Factor 3: Volume Spikes (Rule 5 filter) ---
+  for (let i = si; i < len; i++) {
+    if (noisy[i]) continue;
+    const d = R(rows, i), v = d.vol || 0;
+    if (!v || !va[i]) continue;
+    if (v >= va[i] * 2) {
+      const r = v / va[i], sc = r >= 3 ? 25 : Math.round(10 + (r - 2) * 15);
+      pts.push({p: d.high, s: sc});
+      pts.push({p: d.low,  s: sc});
+    }
+  }
+
+  // --- Factor 4: Gaps (Rule 5 filter) ---
+  for (let i = si + 1; i < len; i++) {
+    if (noisy[i] || noisy[i-1]) continue;
+    const pv = R(rows, i-1), cu = R(rows, i);
+    if (cu.low > pv.high) {
+      let f = false;
+      for (let j = i+1; j < len; j++) if (R(rows, j).low <= pv.high) { f = true; break; }
+      pts.push({p: (cu.low + pv.high) / 2, s: f ? 8 : 20});
+    }
+    if (cu.high < pv.low) {
+      let f = false;
+      for (let j = i+1; j < len; j++) if (R(rows, j).high >= pv.low) { f = true; break; }
+      pts.push({p: (cu.high + pv.low) / 2, s: f ? 8 : 20});
+    }
+  }
+
+  // --- Factor 5: Consolidation Platforms ---
+  for (let i = si + 10; i <= len; i++) {
+    let hM = -Infinity, lM = Infinity;
+    for (let j = i - 10; j < i; j++) {
+      const dj = R(rows, j);
+      if (dj.high > hM) hM = dj.high;
+      if (dj.low < lM)  lM = dj.low;
+    }
+    if (hM - lM < atr * 1.5) {
+      pts.push({p: hM, s: 10});
+      pts.push({p: lM, s: 10});
+    }
+  }
+
+  // --- Factor 6: Recent bar highs/lows ---
+  for (let i = Math.max(si, len-5); i < len; i++) {
+    pts.push({p: R(rows, i).high, s: 8});
+    pts.push({p: R(rows, i).low,  s: 8});
+  }
+
+  // --- Merge nearby candidates ---
+  pts.sort((a, b) => a.p - b.p);
+  const th = Math.max(cp * 0.01, atr * 0.5), merged = [];
+  let ci = 0;
+  while (ci < pts.length) {
+    const base = pts[ci].p;
+    const cl = {min: base, max: base, score: pts[ci].s};
+    let cj = ci + 1;
+    while (cj < pts.length && pts[cj].p - base <= th) {
+      cl.score += pts[cj].s;
+      cl.max = pts[cj].p;
+      cj++;
+    }
+    merged.push(cl);
+    ci = cj;
+  }
+
+  // --- Post-process: Rules 2, 3, 4, 6 per zone ---
+  const maxDist = Math.max(cp * 0.20, atr * 5);
+  const minW = cp * 0.008;
+  const res = [], sup = [];
+
+  for (const z of merged) {
+    if (z.score < 15) continue;
+    let lo = z.min, hi = z.max;
+    if (hi - lo < minW) { const c = (hi + lo) / 2; lo = c - minW / 2; hi = c + minW / 2; }
+    const mid = (lo + hi) / 2;
+    if (mid > cp + maxDist || mid < cp - maxDist) continue;
+
+    let score = Math.min(100, z.score);
+    let status = 'normal', tag = '';
+    const isRes = mid > cp;
+
+    // Find zone "birth" index: first bar where close crossed to the other side of the zone
+    // Support zone: first bar where close > hi (stock first rose above it)
+    // Resistance zone: first bar where close < lo (stock first fell below it)
+    let birth = len; // default: zone never established → skip post-processing
+    for (let i = si; i < len; i++) {
+      if (isRes ? R(rows, i).close < lo : R(rows, i).close > hi) { birth = i; break; }
+    }
+
+    // Rule 6: Count close-based touches AFTER birth (consecutive entries = 1 touch)
+    let inZ = false, touches = 0;
+    for (let i = birth; i < len; i++) {
+      const cl = R(rows, i).close;
+      const inside = cl >= lo && cl <= hi;
+      if (inside && !inZ) { touches++; inZ = true; }
+      else if (!inside) inZ = false;
+    }
+    if (touches >= 3) score += 20;
+    else if (touches >= 2) score += 10;
+
+    // Rule 2: False breakout detection (only after birth)
+    let fb = 0;
+    for (let i = Math.max(birth, si + 1); i < len - 3; i++) {
+      const d = R(rows, i);
+      if (isRes) {
+        if (d.high > hi && d.close < lo) {
+          let ret = true;
+          for (let j = i+1; j <= Math.min(i+3, len-1); j++)
+            if (R(rows, j).close >= lo) { ret = false; break; }
+          if (ret) fb++;
+        }
+      } else {
+        if (d.low < lo && d.close > hi) {
+          let ret = true;
+          for (let j = i+1; j <= Math.min(i+3, len-1); j++)
+            if (R(rows, j).close <= hi) { ret = false; break; }
+          if (ret) fb++;
+        }
+      }
+    }
+    if (fb > 0) {
+      score += 20 + (fb > 1 ? 15 : 0);
+      status = 'trap';
+      tag = '假突破' + fb + '次';
+    }
+
+    // Rule 3: Valid breakout (only after birth)
+    let vb = false;
+    for (let i = Math.max(birth, si + 1); i < len - 2; i++) {
+      const d = R(rows, i);
+      if (isRes) {
+        if (d.close > hi && va[i] > 0 && (d.vol || 0) > va[i] * 1.2) {
+          let sus = true;
+          for (let j = i+1; j <= Math.min(i+2, len-1); j++)
+            if (R(rows, j).close <= hi) { sus = false; break; }
+          if (sus) { vb = true; break; }
+        }
+      } else {
+        if (d.close < lo && va[i] > 0 && (d.vol || 0) > va[i] * 1.2) {
+          let sus = true;
+          for (let j = i+1; j <= Math.min(i+2, len-1); j++)
+            if (R(rows, j).close >= lo) { sus = false; break; }
+          if (sus) { vb = true; break; }
+        }
+      }
+    }
+    if (vb) {
+      score -= 25;
+      if (status !== 'trap') { status = 'broken'; tag = '失效'; }
+    }
+
+    // Rule 4: Volume-price divergence (only after birth)
+    let div = false;
+    for (let i = Math.max(birth, si + 2); i < len; i++) {
+      const d0 = R(rows, i-2), d1 = R(rows, i-1), d2 = R(rows, i);
+      if (isRes) {
+        if (d2.high > d1.high && d1.high > d0.high
+            && (d2.vol||0) < (d1.vol||0) && (d1.vol||0) < (d0.vol||0)
+            && d2.high >= lo - atr && d2.high <= hi + atr) { div = true; break; }
+      } else {
+        if (d2.low < d1.low && d1.low < d0.low
+            && (d2.vol||0) < (d1.vol||0) && (d1.vol||0) < (d0.vol||0)
+            && d2.low >= lo - atr && d2.low <= hi + atr) { div = true; break; }
+      }
+    }
+    if (div) {
+      score += isRes ? -15 : 10;
+      tag = tag ? tag + ' 背离' : '背离';
+    }
+
+    score = Math.max(0, Math.min(100, score));
+    if (score < 15) continue;
+
+    (isRes ? res : sup).push({low: lo, high: hi, score, status, tag});
+  }
+
+  res.sort((a, b) => b.score - a.score);
+  sup.sort((a, b) => b.score - a.score);
+  return {resistance: res.slice(0, 3), support: sup.slice(0, 3)};
+}
+
 function renderChart() {
   const rows = rawData.data, len = rows.length;
   const dates=[], ohlc=[], vols=[], ma5=[],ma7=[],ma10=[],ma20=[];
@@ -283,6 +532,36 @@ function renderChart() {
     hist[i]={value:d.hist, itemStyle:{color:d.hist>=0?UP:DN}};
     kdjK[i]=d.k; kdjD[i]=d.d; kdjJ[i]=d.j;
   }
+
+  // === Support/Resistance Zones ===
+  const zones = calcSR(rows);
+  const maData = [];
+
+  function addZone(z, prefix, rgb) {
+    let op, bw, bt, bc;
+    if (z.status === 'broken') {
+      op = '0.05'; bw = 1; bt = 'dashed'; bc = 'rgba('+rgb+',0.3)';
+    } else if (z.status === 'trap') {
+      op = Math.max(0.08, 0.15 + (z.score - 30) / 70 * 0.30).toFixed(2);
+      bw = 1; bt = 'solid'; bc = 'rgba('+rgb+',0.8)';
+    } else {
+      op = Math.max(0.08, 0.1 + (z.score - 30) / 70 * 0.25).toFixed(2);
+      bw = 0; bt = 'solid'; bc = 'transparent';
+    }
+    const mid = ((z.low + z.high) / 2).toFixed(2);
+    const lbl = z.status === 'broken'
+      ? prefix + ' ' + mid + ' [失效]'
+      : prefix + ' ' + mid + ' [' + z.score + '分]' + (z.tag ? ' ' + z.tag : '');
+    maData.push([
+      {xAxis:dates[0], yAxis:z.high,
+        itemStyle:{color:'rgba('+rgb+','+op+')',borderWidth:bw,borderColor:bc,borderType:bt},
+        label:{show:true,position:'insideTopRight',formatter:lbl,color:'rgba('+rgb+',0.9)',fontSize:10}},
+      {xAxis:dates[len-1], yAxis:z.low}
+    ]);
+  }
+
+  zones.resistance.forEach(z => addZone(z, '压力', '231,76,60'));
+  zones.support.forEach(z => addZone(z, '支撑', '46,204,113'));
 
   const mkX = (gi, showLabel) => ({
     type:'category', data:dates, gridIndex:gi, boundaryGap:true,
@@ -303,6 +582,7 @@ function renderChart() {
       {text:'MA5', left:200, top:8, textStyle:{color:'#f1c40f',fontSize:11,fontWeight:'normal'}},
       {text:'MA10', left:238, top:8, textStyle:{color:'#9b59b6',fontSize:11,fontWeight:'normal'}},
       {text:'MA20', left:286, top:8, textStyle:{color:'#3498db',fontSize:11,fontWeight:'normal'}},
+      {text:maData.length?'压力/支撑':'', left:345, top:8, textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
       {text:`VOL  ${fmtVol(R(rows,rows.length-1).vol)}`, left:70, top:'49.5%', textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
       {text:'MACD (12,26,9)', left:70, top:'63.5%', textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
       {text:'KDJ (9,3,3)', left:70, top:'81.5%', textStyle:{color:'#555',fontSize:11,fontWeight:'normal'}},
@@ -364,7 +644,11 @@ function renderChart() {
     ],
     dataZoom:[{type:'inside',xAxisIndex:[0,1,2,3],start:Math.max(0,(1-120/len)*100),end:100,zoomOnMouseWheel:false,moveOnMouseWheel:false,moveOnMouseMove:false}],
     series:[
-      {name:'K线',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:ohlc,itemStyle:{color:UP,color0:DN,borderColor:UP,borderColor0:DN}},
+      {name:'K线',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:ohlc,
+        itemStyle:{color:UP,color0:DN,borderColor:UP,borderColor0:DN}},
+      {name:'S/R',type:'line',xAxisIndex:0,yAxisIndex:0,data:dates.map(function(){return null}),
+        symbol:'none',lineStyle:{width:0},silent:true,tooltip:{show:false},z:100,
+        markArea:{silent:true,data:maData}},
       {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma5,symbol:'none',silent:true,lineStyle:{width:1,color:MA_C[0]}},
       {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma10,symbol:'none',silent:true,lineStyle:{width:1,color:MA_C[2]}},
       {name:'MA20',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma20,symbol:'none',silent:true,lineStyle:{width:1,color:MA_C[3]}},
