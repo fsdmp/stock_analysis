@@ -6,7 +6,11 @@
 <title>A股数据分析平台</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+body {
+  background: #1a1a2e; color: #e0e0e0;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  min-height: 100vh; display: flex; flex-direction: column;
+}
 
 /* Nav */
 .nav {
@@ -15,23 +19,63 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
 }
 .nav h1 { font-size: 20px; color: #e94560; }
 .nav-right { display: flex; align-items: center; gap: 12px; }
-.search {
-  padding: 7px 14px; width: 240px; background: #0f3460; border: 1px solid #2a2a4a;
-  border-radius: 4px; color: #fff; font-size: 14px; outline: none;
-}
-.search:focus { border-color: #e94560; }
-.btn {
-  padding: 7px 16px; border-radius: 4px; border: none; cursor: pointer;
-  font-size: 13px; transition: background .2s;
-}
-.btn-update { background: #0f3460; color: #e0e0e0; border: 1px solid #2a2a4a; }
-.btn-update:hover { background: #162447; }
-.btn-update.running { background: #e94560; color: #fff; }
 .status { font-size: 12px; color: #888; }
 
-/* Progress bar */
+/* Main center content */
+.main {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; padding: 60px 24px;
+}
+
+/* Search */
+.search-box { position: relative; width: 100%; max-width: 520px; }
+.search-input {
+  width: 100%; padding: 14px 20px; padding-right: 50px;
+  background: #16213e; border: 2px solid #0f3460; border-radius: 8px;
+  color: #fff; font-size: 16px; outline: none; transition: border-color .2s;
+}
+.search-input:focus { border-color: #e94560; }
+.search-input::placeholder { color: #555; }
+.search-icon {
+  position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+  color: #555; font-size: 18px; pointer-events: none;
+}
+
+/* Dropdown */
+.dropdown {
+  display: none; position: absolute; top: 100%; left: 0; right: 0;
+  margin-top: 4px; background: #16213e; border: 1px solid #0f3460;
+  border-radius: 8px; max-height: 320px; overflow-y: auto; z-index: 10;
+}
+.dropdown.show { display: block; }
+.dropdown-item {
+  padding: 10px 20px; cursor: pointer; font-size: 14px; display: flex;
+  justify-content: space-between; align-items: center;
+}
+.dropdown-item:hover { background: #0f3460; }
+.dropdown-item .code { color: #3498db; }
+.dropdown-item .name { color: #888; font-size: 12px; }
+
+/* Action buttons */
+.actions {
+  display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap;
+  justify-content: center; width: 100%; max-width: 520px;
+}
+.btn {
+  padding: 10px 24px; border-radius: 8px; border: 1px solid #2a2a4a;
+  cursor: pointer; font-size: 14px; transition: all .2s;
+  display: flex; align-items: center; gap: 6px;
+}
+.btn-update { background: #0f3460; color: #e0e0e0; }
+.btn-update:hover { background: #162447; border-color: #e94560; }
+.btn-update.running { background: #e94560; color: #fff; border-color: #e94560; }
+.btn-tool { background: #0f3460; color: #e0e0e0; }
+.btn-tool:hover { background: #162447; border-color: #e94560; }
+
+/* Progress */
 .progress-wrap {
-  display: none; margin: 0 24px; padding: 10px 0;
+  display: none; width: 100%; max-width: 520px;
+  margin-top: 20px;
 }
 .progress-wrap.active { display: block; }
 .progress-bar-bg {
@@ -41,43 +85,7 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
   height: 100%; width: 0; background: linear-gradient(90deg, #e94560, #ff6b6b);
   border-radius: 4px; transition: width .3s;
 }
-.progress-text {
-  font-size: 12px; color: #888; margin-top: 4px;
-}
-
-/* Stats bar */
-.stats {
-  display: flex; gap: 24px; padding: 10px 24px; background: #16213e;
-  border-bottom: 1px solid #0f3460; font-size: 13px;
-}
-.stats .label { color: #666; margin-right: 6px; }
-.stats .val { color: #e94560; font-weight: 600; }
-
-/* Table */
-.table-wrap { padding: 16px 24px; }
-table { width: 100%; border-collapse: collapse; }
-th {
-  text-align: left; padding: 8px 12px; font-size: 12px; color: #666;
-  border-bottom: 1px solid #2a2a4a; font-weight: normal;
-}
-td { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #1e1e30; }
-tr:hover td { background: #16213e; }
-.up { color: #e74c3c; }
-.down { color: #2ecc71; }
-.code-link { color: #3498db; text-decoration: none; }
-.code-link:hover { text-decoration: underline; }
-
-/* Pagination */
-.pager {
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  padding: 16px; font-size: 13px;
-}
-.pager button {
-  padding: 4px 12px; background: #0f3460; border: 1px solid #2a2a4a;
-  border-radius: 4px; color: #e0e0e0; cursor: pointer;
-}
-.pager button:disabled { opacity: .3; cursor: default; }
-.pager .info { color: #666; }
+.progress-text { font-size: 12px; color: #888; margin-top: 6px; text-align: center; }
 </style>
 </head>
 <body>
@@ -86,78 +94,84 @@ tr:hover td { background: #16213e; }
   <h1>A股数据分析平台</h1>
   <div class="nav-right">
     <span class="status" id="status"></span>
-    <input class="search" id="searchInput" type="text" placeholder="搜索股票代码..." autocomplete="off">
-    <button class="btn btn-update" id="updateBtn" onclick="triggerUpdate()">更新数据</button>
   </div>
 </div>
 
-<div class="stats" id="stats"></div>
+<div class="main">
+  <div class="search-box">
+    <input class="search-input" id="searchInput" type="text" placeholder="输入股票代码或名称搜索..." autocomplete="off">
+    <span class="search-icon">&#128269;</span>
+    <div class="dropdown" id="dropdown"></div>
+  </div>
 
-<div class="progress-wrap" id="progressWrap">
-  <div class="progress-bar-bg"><div class="progress-bar" id="progressBar"></div></div>
-  <div class="progress-text" id="progressText"></div>
+  <div class="actions">
+    <button class="btn btn-update" id="updateBtn" onclick="triggerUpdate()">&#128260; 更新数据</button>
+    <!-- 工具按钮占位，后续添加 -->
+  </div>
+
+  <div class="progress-wrap" id="progressWrap">
+    <div class="progress-bar-bg"><div class="progress-bar" id="progressBar"></div></div>
+    <div class="progress-text" id="progressText"></div>
+  </div>
 </div>
-
-<div class="table-wrap">
-  <table>
-    <thead><tr><th>代码</th><th>最新价</th><th>涨跌幅</th><th>数据日期</th></tr></thead>
-    <tbody id="tbody"></tbody>
-  </table>
-</div>
-
-<div class="pager" id="pager"></div>
 
 <script>
-let page = 1, q = '', total = 0;
-const size = 50;
-
 const searchInput = document.getElementById('searchInput');
+const dropdown = document.getElementById('dropdown');
 let searchTimer;
+
 searchInput.addEventListener('input', () => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => { q = searchInput.value.trim(); page = 1; load(); }, 300);
+  const q = searchInput.value.trim();
+  if (!q) { dropdown.classList.remove('show'); return; }
+  searchTimer = setTimeout(() => search(q), 200);
 });
+
 searchInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { q = searchInput.value.trim(); page = 1; load(); }
+  if (e.key === 'Enter') {
+    const q = searchInput.value.trim();
+    if (q) search(q);
+  }
+  if (e.key === 'Escape') {
+    dropdown.classList.remove('show');
+  }
 });
 
-async function load() {
-  const resp = await fetch(`/api/stocks?q=${q}&page=${page}&size=${size}`);
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-box')) dropdown.classList.remove('show');
+});
+
+async function search(q) {
+  const resp = await fetch(`/api/stocks?q=${q}&page=1&size=20`);
   const json = await resp.json();
-  total = json.total;
   const data = json.data;
-
-  document.getElementById('stats').innerHTML =
-    `<span><span class="label">股票总数</span><span class="val">${total}</span></span>` +
-    `<span><span class="label">当前页</span><span class="val">${page} / ${Math.ceil(total/size) || 1}</span></span>`;
-
-  const tbody = document.getElementById('tbody');
-  tbody.innerHTML = data.map(s => {
-    const cls = s.pct_change >= 0 ? 'up' : 'down';
+  if (!data.length) {
+    dropdown.innerHTML = '<div class="dropdown-item" style="color:#555">无匹配结果</div>';
+    dropdown.classList.add('show');
+    return;
+  }
+  dropdown.innerHTML = data.map(s => {
+    const cls = s.pct_change >= 0 ? 'color:#e74c3c' : 'color:#2ecc71';
     const sign = s.pct_change >= 0 ? '+' : '';
-    return `<tr>
-      <td><a class="code-link" href="/stock/${s.code}">${s.code}</a></td>
-      <td class="${cls}">${s.close.toFixed(2)}</td>
-      <td class="${cls}">${sign}${s.pct_change.toFixed(2)}%</td>
-      <td style="color:#555">${s.date}</td>
-    </tr>`;
+    const name = s.name || '';
+    return `<div class="dropdown-item" onclick="goStock('${s.code}')">
+      <span><span class="code">${s.code}</span>${name ? ` <span style="color:#e0e0e0">${name}</span>` : ''}</span>
+      <span style="${cls}">${sign}${s.pct_change.toFixed(2)}%</span>
+    </div>`;
   }).join('');
-
-  const totalPages = Math.ceil(total / size) || 1;
-  document.getElementById('pager').innerHTML =
-    `<button ${page<=1?'disabled':''} onclick="go(${page-1})">上一页</button>` +
-    `<span class="info">${page} / ${totalPages}</span>` +
-    `<button ${page>=totalPages?'disabled':''} onclick="go(${page+1})">下一页</button>`;
+  dropdown.classList.add('show');
 }
 
-function go(p) { page = p; load(); window.scrollTo(0,0); }
+function goStock(code) {
+  window.location.href = `/stock/${code}`;
+}
 
 // Update
 async function triggerUpdate() {
   if (!confirm('确认更新所有股票数据？更新期间可能会持续较长时间。')) return;
   const btn = document.getElementById('updateBtn');
   btn.classList.add('running');
-  btn.textContent = '更新中...';
+  btn.innerHTML = '&#9889; 更新中...';
   await fetch('/api/update', {method:'POST'});
   pollStatus();
 }
@@ -173,7 +187,7 @@ async function pollStatus() {
   if (s.running) {
     el.textContent = s.message || '正在更新数据...';
     btn.classList.add('running');
-    btn.textContent = '更新中...';
+    btn.innerHTML = '&#9889; 更新中...';
     pw.classList.add('active');
     if (s.total > 0) {
       const pct = Math.round(s.current / s.total * 100);
@@ -184,15 +198,13 @@ async function pollStatus() {
   } else {
     el.textContent = s.message || '就绪';
     btn.classList.remove('running');
-    btn.textContent = '更新数据';
+    btn.innerHTML = '&#128260; 更新数据';
     pw.classList.remove('active');
     pb.style.width = '0';
     pt.textContent = '';
-    load();
   }
 }
 
-load();
 pollStatus();
 </script>
 </body>

@@ -20,7 +20,21 @@ atexit.register(bs_shutdown)
 
 # Pre-build stock index on startup
 _stock_index: dict = {}
+_stock_names: dict = {}  # code -> name mapping
 _update_status = {"running": False, "message": "", "current": 0, "total": 0, "code": ""}
+
+
+def build_stock_names():
+    """Fetch stock code-to-name mapping from baostock."""
+    global _stock_names
+    try:
+        from stock_data.fetcher import get_mainboard_stocks
+        df = get_mainboard_stocks()
+        _stock_names = dict(zip(df["code"], df["name"]))
+        print(f"Loaded {len(_stock_names)} stock names")
+    except Exception as e:
+        print(f"Warning: failed to load stock names: {e}")
+        _stock_names = {}
 
 
 def build_stock_index():
@@ -33,12 +47,13 @@ def build_stock_index():
             last_idx = last_batch.num_rows - 1
             _stock_index[f.stem] = {
                 "code": f.stem,
+                "name": _stock_names.get(f.stem, ""),
                 "close": round(float(last_batch.column("close")[last_idx].as_py()), 2),
                 "pct_change": round(float(last_batch.column("pct_change")[last_idx].as_py() or 0), 2),
                 "date": str(pd.Timestamp(last_batch.column("date")[last_idx].as_py()).date()),
             }
         except Exception:
-            _stock_index[f.stem] = {"code": f.stem, "close": 0, "pct_change": 0, "date": ""}
+            _stock_index[f.stem] = {"code": f.stem, "name": _stock_names.get(f.stem, ""), "close": 0, "pct_change": 0, "date": ""}
     print(f"Indexed {len(_stock_index)} stocks")
 
 
@@ -71,7 +86,7 @@ def api_stocks():
     all_list = sorted(_stock_index.values(), key=lambda x: x["code"])
 
     if q:
-        all_list = [s for s in all_list if q in s["code"]]
+        all_list = [s for s in all_list if q in s["code"] or q in s.get("name", "")]
 
     total = len(all_list)
     start = (page - 1) * size
@@ -105,7 +120,7 @@ def api_stock(code):
     df["date"] = df["date"].dt.strftime("%Y-%m-%d")
     # Replace NaN/NA with None for JSON serialization
     df = df.astype(object).where(df.notna(), None)
-    return jsonify({"columns": cols, "data": df.values.tolist()})
+    return jsonify({"columns": cols, "data": df.values.tolist(), "name": _stock_names.get(code, "")})
 
 
 @app.route("/api/intraday/<code>/<date>")
@@ -182,6 +197,7 @@ def api_update_status():
 
 
 if __name__ == "__main__":
+    build_stock_names()
     build_stock_index()
     print("Starting A-Share Stock Viewer...")
     print("Open http://localhost:8080 in your browser")

@@ -100,7 +100,7 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
 
 <div class="top-bar">
   <div class="top-row">
-    <h1><a href="/" style="color:#e94560;text-decoration:none">A股K线</a></h1>
+    <h1><a href="/" style="color:#e94560;text-decoration:none">A股K线</a> <span id="stockName" style="color:#e0e0e0;font-weight:normal;font-size:14px"></span></h1>
     <div class="search-box">
       <input id="searchInput" type="text" placeholder="股票代码..." autocomplete="off">
       <div class="dropdown" id="dropdown"></div>
@@ -167,7 +167,7 @@ const chart = echarts.init(document.getElementById('chart'), 'dark');
 const UP = '#e74c3c', DN = '#2ecc71';
 const MA_C = ['#f1c40f','#e67e22','#9b59b6','#3498db'];
 
-let currentCode = '', rawData = null;
+let currentCode = '', currentName = '', rawData = null;
 const searchInput = document.getElementById('searchInput');
 const dropdown = document.getElementById('dropdown');
 let searchTimer;
@@ -192,14 +192,16 @@ const debouncedLoad = debounce(code => loadStock(code), 500);
 
 async function doSearch(q) {
   if (!q) { dropdown.classList.remove('show'); return; }
-  const resp = await fetch(`/api/stocks?q=${q}`);
-  const stocks = await resp.json();
+  const resp = await fetch(`/api/stocks?q=${q}&size=20`);
+  const json = await resp.json();
+  const stocks = json.data;
   if (!stocks.length) { dropdown.classList.remove('show'); return; }
   dropdown.innerHTML = stocks.map(s => {
     const cls = s.pct_change >= 0 ? 'up' : 'down';
     const sign = s.pct_change >= 0 ? '+' : '';
+    const name = s.name || '';
     return `<div class="dropdown-item" onclick="debouncedLoad('${s.code}')">
-      <span>${s.code}</span><span class="${cls}">${s.close} ${sign}${s.pct_change}%</span>
+      <span>${s.code}${name ? ' '+name : ''}</span><span class="${cls}">${s.close} ${sign}${s.pct_change}%</span>
     </div>`;
   }).join('');
   dropdown.classList.add('show');
@@ -224,6 +226,9 @@ async function loadStock(code) {
     const resp = await fetch(`/api/stock/${code}`);
     rawData = await resp.json();
     if (rawData.error) { alert(rawData.error); return; }
+    currentName = rawData.name || '';
+    document.getElementById('stockName').textContent = currentName ? currentName : '';
+    document.title = currentName ? `${currentName}(${currentCode}) - A股K线` : `${currentCode} - A股K线`;
     renderChart();
     renderInfo();
   } catch(e) {
@@ -353,20 +358,23 @@ function renderChart() {
       {left:65,right:65,top:'82%',height:'14%'},
     ],
     xAxis:[mkX(0,true),mkX(1),mkX(2),mkX(3)],
-    yAxis:[mkY(0), mkY(1,v=>fmtVol(v)), mkY(2), mkY(3)],
+    yAxis:[
+      {...mkY(0), axisPointer:{show:true,type:'line',lineStyle:{color:'#555',type:'dashed',width:1}}},
+      mkY(1,v=>fmtVol(v)), mkY(2), mkY(3)
+    ],
     dataZoom:[{type:'inside',xAxisIndex:[0,1,2,3],start:Math.max(0,(1-120/len)*100),end:100,zoomOnMouseWheel:false,moveOnMouseWheel:false,moveOnMouseMove:false}],
     series:[
       {name:'K线',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:ohlc,itemStyle:{color:UP,color0:DN,borderColor:UP,borderColor0:DN}},
-      {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma5,symbol:'none',lineStyle:{width:1,color:MA_C[0]}},
-      {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma10,symbol:'none',lineStyle:{width:1,color:MA_C[2]}},
-      {name:'MA20',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma20,symbol:'none',lineStyle:{width:1,color:MA_C[3]}},
+      {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma5,symbol:'none',silent:true,lineStyle:{width:1,color:MA_C[0]}},
+      {name:'MA10',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma10,symbol:'none',silent:true,lineStyle:{width:1,color:MA_C[2]}},
+      {name:'MA20',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma20,symbol:'none',silent:true,lineStyle:{width:1,color:MA_C[3]}},
       {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:vols},
       {name:'MACD柱',type:'bar',xAxisIndex:2,yAxisIndex:2,data:hist},
-      {name:'DIF',type:'line',xAxisIndex:2,yAxisIndex:2,data:dif,symbol:'none',lineStyle:{width:1,color:'#f1c40f'}},
-      {name:'DEA',type:'line',xAxisIndex:2,yAxisIndex:2,data:dea,symbol:'none',lineStyle:{width:1,color:'#3498db'}},
-      {name:'K',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjK,symbol:'none',lineStyle:{width:1,color:'#f1c40f'}},
-      {name:'D',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjD,symbol:'none',lineStyle:{width:1,color:'#3498db'}},
-      {name:'J',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjJ,symbol:'none',lineStyle:{width:1,color:'#e74c3c'}},
+      {name:'DIF',type:'line',xAxisIndex:2,yAxisIndex:2,data:dif,symbol:'none',silent:true,lineStyle:{width:1,color:'#f1c40f'}},
+      {name:'DEA',type:'line',xAxisIndex:2,yAxisIndex:2,data:dea,symbol:'none',silent:true,lineStyle:{width:1,color:'#3498db'}},
+      {name:'K',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjK,symbol:'none',silent:true,lineStyle:{width:1,color:'#f1c40f'}},
+      {name:'D',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjD,symbol:'none',silent:true,lineStyle:{width:1,color:'#3498db'}},
+      {name:'J',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjJ,symbol:'none',silent:true,lineStyle:{width:1,color:'#e74c3c'}},
     ],
   }, true);
 }
@@ -442,8 +450,8 @@ async function openIntraday(dateStr, dateIdx) {
 
 function updateIntradayTitle() {
   const dateStr = intradayDates[intradayDateIndex] || '';
-  document.getElementById('intradayTitle').textContent =
-    `${currentCode} · ${dateStr}`;
+  const label = currentName ? `${currentCode} ${currentName}` : currentCode;
+  document.getElementById('intradayTitle').textContent = `${label} · ${dateStr}`;
 }
 
 function updateModeButtons() {
@@ -602,12 +610,14 @@ function renderTimeline(data, refPrice) {
       {type:'value',gridIndex:0,min:pctMin,max:pctMax,
         splitNumber:4,interval:(pctMax-pctMin)/4,
         splitLine:{lineStyle:{color:'#1e1e30'}},
+        axisPointer:{show:true,type:'line',lineStyle:{color:'#555',type:'dashed',width:1}},
         axisLabel:{color:'#555',fontSize:10,
           formatter:function(v){return v.toFixed(2)+'%';}},
         axisLine:{onZero:true},axisTick:{onZero:true}},
       {type:'value',gridIndex:0,position:'right',min:priceMin,max:priceMax,
         splitNumber:4,interval:(priceMax-priceMin)/4,
         splitLine:{show:false},
+        axisPointer:{show:true,type:'line',lineStyle:{color:'#555',type:'dashed',width:1}},
         axisLabel:{color:'#555',fontSize:10,formatter:function(v){return v.toFixed(2);}}},
       {scale:true,gridIndex:1,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{show:false}},
       {scale:true,gridIndex:2,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{color:'#555',fontSize:10}},
@@ -729,12 +739,14 @@ function renderIntradayKline(data, refPrice) {
       {type:'value',gridIndex:0,min:pctMin,max:pctMax,
         splitNumber:4,interval:(pctMax-pctMin)/4,
         splitLine:{lineStyle:{color:'#1e1e30'}},
+        axisPointer:{show:true,type:'line',lineStyle:{color:'#555',type:'dashed',width:1}},
         axisLabel:{color:'#555',fontSize:10,
           formatter:function(v){return v.toFixed(2)+'%';}},
         axisLine:{onZero:true},axisTick:{onZero:true}},
       {type:'value',gridIndex:0,position:'right',min:priceMin,max:priceMax,
         splitNumber:4,interval:(priceMax-priceMin)/4,
         splitLine:{show:false},
+        axisPointer:{show:true,type:'line',lineStyle:{color:'#555',type:'dashed',width:1}},
         axisLabel:{color:'#555',fontSize:10,formatter:function(v){return v.toFixed(2);}}},
       {scale:true,gridIndex:1,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{show:false}},
       {scale:true,gridIndex:2,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{color:'#555',fontSize:10}},

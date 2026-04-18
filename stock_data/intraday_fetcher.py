@@ -67,22 +67,32 @@ def fetch_intraday(code: str, date: str, freq: str = "5") -> pd.DataFrame | None
     d = date.replace("-", "")
     sd = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
 
-    try:
-        rows, rs = bs_query_iter(
-            bs.query_history_k_data_plus,
-            bs_code, INTRADAY_FIELDS,
-            start_date=sd, end_date=sd,
-            frequency=freq, adjustflag="2",
-        )
-        if rs.error_code != "0":
-            logger.warning(f"Baostock intraday error for {code} on {sd}: {rs.error_msg}")
+    for attempt in range(3):
+        try:
+            rows, rs = bs_query_iter(
+                bs.query_history_k_data_plus,
+                bs_code, INTRADAY_FIELDS,
+                start_date=sd, end_date=sd,
+                frequency=freq, adjustflag="2",
+            )
+            if rs.error_code != "0":
+                logger.warning(f"Baostock intraday error for {code} on {sd} (attempt {attempt+1}): {rs.error_msg}")
+                if attempt < 2:
+                    import time; time.sleep(1)
+                    continue
+                return None
+            if not rows:
+                return None
+            return pd.DataFrame(rows, columns=rs.fields)
+        except (BrokenPipeError, ConnectionError, OSError) as e:
+            logger.warning(f"Intraday network error for {code} on {sd} (attempt {attempt+1}): {e}")
+            if attempt < 2:
+                import time; time.sleep(1)
+                continue
             return None
-        if not rows:
+        except Exception as e:
+            logger.warning(f"Intraday fetch failed for {code} on {sd}: {e}")
             return None
-        return pd.DataFrame(rows, columns=rs.fields)
-    except Exception as e:
-        logger.warning(f"Intraday fetch failed for {code} on {sd}: {e}")
-        return None
 
 
 def _standardize_intraday(df: pd.DataFrame) -> pd.DataFrame:
