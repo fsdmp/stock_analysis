@@ -123,9 +123,17 @@ def api_stock(code):
     cols = [
         "date", "open", "close", "high", "low", "volume", "pct_change",
         "ma5", "ma7", "ma10", "ma20",
+        "vwma5", "vwma10", "vwma20",
+        "bb_upper", "bb_middle", "bb_lower", "bb_bandwidth",
         "macd_dif", "macd_dea", "macd_hist",
         "kdj_k", "kdj_d", "kdj_j",
     ]
+    # Only read columns that exist in the parquet file
+    import pyarrow.parquet as pq
+    pf = pq.ParquetFile(path)
+    available = set(pf.schema.names)
+    cols = [c for c in cols if c in available]
+
     df = pd.read_parquet(path, columns=cols)
 
     start = request.args.get("start")
@@ -153,9 +161,16 @@ def api_analysis(code):
     cols = [
         "date", "open", "close", "high", "low", "volume", "pct_change",
         "ma5", "ma7", "ma10", "ma20",
+        "vwma5", "vwma10", "vwma20",
+        "bb_upper", "bb_middle", "bb_lower", "bb_bandwidth",
         "macd_dif", "macd_dea", "macd_hist",
         "kdj_k", "kdj_d", "kdj_j",
     ]
+    import pyarrow.parquet as pq
+    pf = pq.ParquetFile(path)
+    available = set(pf.schema.names)
+    cols = [c for c in cols if c in available]
+
     df = pd.read_parquet(path, columns=cols)
 
     start = request.args.get("start")
@@ -198,6 +213,36 @@ def api_intraday(code, date):
     df = df.astype(object).where(df.notna(), None)
     return jsonify({"columns": cols, "data": df.values.tolist(),
                      "date": date, "code": code, "freq": freq})
+
+
+@app.route("/api/score/<code>")
+def api_score(code):
+    """Return next-day trading score for a stock."""
+    code = code.zfill(6)
+    path = DATA_DIR / f"{code}.parquet"
+    if not path.exists():
+        return jsonify({"error": f"Stock {code} not found"}), 404
+
+    from stock_data.scoring import calc_score
+    cols = [
+        "date", "open", "close", "high", "low", "volume", "pct_change",
+        "ma5", "ma7", "ma10", "ma20",
+        "vwma5", "vwma10", "vwma20",
+        "bb_upper", "bb_middle", "bb_lower", "bb_bandwidth",
+        "macd_dif", "macd_dea", "macd_hist",
+        "kdj_k", "kdj_d", "kdj_j",
+    ]
+    import pyarrow.parquet as pq
+    pf = pq.ParquetFile(path)
+    available = set(pf.schema.names)
+    cols = [c for c in cols if c in available]
+
+    df = pd.read_parquet(path, columns=cols)
+    result = calc_score(df)
+    result["code"] = code
+    result["name"] = _stock_names.get(code, "")
+    result["close"] = round(float(df["close"].iloc[-1]), 2)
+    return jsonify(result)
 
 
 @app.route("/api/update", methods=["POST"])

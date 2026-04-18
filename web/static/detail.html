@@ -47,6 +47,121 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
 }
 #chart { width: 100%; height: calc(100vh - 68px); }
 
+/* Score button */
+#scoreBtn {
+  position: fixed; right: 12px; top: 8px; z-index: 90;
+  padding: 6px 18px; border-radius: 20px; border: 1px solid #e94560;
+  background: linear-gradient(135deg, rgba(233,69,96,.2), rgba(233,69,96,.08));
+  color: #e94560; font-size: 13px; cursor: pointer;
+  transition: all .2s; font-weight: 600;
+  box-shadow: 0 2px 8px rgba(233,69,96,.15);
+}
+#scoreBtn:hover {
+  background: linear-gradient(135deg, #e94560, #c0392b); color: #fff;
+  box-shadow: 0 4px 16px rgba(233,69,96,.35); transform: translateY(-1px);
+}
+
+/* Score overlay */
+.score-overlay {
+  display: none; position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,.65); backdrop-filter: blur(4px);
+}
+.score-overlay.active {
+  display: flex; justify-content: center; align-items: center;
+}
+.score-box {
+  width: 560px; min-width: 420px; max-width: 94vw; max-height: 90vh;
+  background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+  border: 1px solid rgba(233,69,96,.2); border-radius: 12px;
+  display: flex; flex-direction: column;
+  box-shadow: 0 24px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.03) inset;
+}
+.score-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 20px; border-bottom: 1px solid rgba(255,255,255,.06);
+  flex-shrink: 0;
+}
+#scoreContent {
+  padding: 20px; overflow-y: auto; flex: 1; font-size: 13px; line-height: 1.7;
+}
+#scoreContent::-webkit-scrollbar { width: 4px; }
+#scoreContent::-webkit-scrollbar-track { background: transparent; }
+#scoreContent::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 2px; }
+#scoreContent .score-loading {
+  display: flex; justify-content: center; align-items: center;
+  height: 200px; color: #555; font-size: 14px;
+}
+
+/* Score top card */
+.sc-top {
+  display: flex; align-items: center; gap: 20px;
+  padding: 16px; background: rgba(255,255,255,.03); border-radius: 10px;
+  margin-bottom: 16px; border: 1px solid rgba(255,255,255,.04);
+  flex-shrink: 0;
+}
+.sc-gauge { position: relative; width: 100px; height: 100px; flex-shrink: 0; }
+.sc-gauge svg { transform: rotate(-90deg); }
+.sc-gauge-bg { fill: none; stroke: #2a2a4a; stroke-width: 6; }
+.sc-gauge-fill { fill: none; stroke-width: 6; stroke-linecap: round; transition: stroke-dashoffset .8s ease; }
+.sc-gauge-txt {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}
+.sc-gauge-num { font-size: 28px; font-weight: 800; line-height: 1; }
+.sc-gauge-label { font-size: 10px; color: #666; margin-top: 2px; }
+.sc-info { flex: 1; min-width: 0; }
+.sc-action {
+  font-size: 20px; font-weight: 700; line-height: 1.2;
+  text-shadow: 0 0 20px currentColor;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sc-hold {
+  display: inline-block; margin-top: 8px; padding: 3px 10px;
+  border-radius: 4px; font-size: 12px; color: #aaa;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.06);
+}
+.sc-summary {
+  font-size: 12px; color: #777; margin-top: 8px; line-height: 1.6;
+  padding-top: 8px; border-top: 1px solid rgba(255,255,255,.05);
+  overflow-wrap: break-word;
+}
+
+/* Dimension rows */
+.sc-sec-title {
+  font-size: 12px; color: #e94560; font-weight: 600; margin-bottom: 12px;
+  display: flex; align-items: center; gap: 6px;
+}
+.sc-sec-title::before { content: ''; display: inline-block; width: 3px; height: 14px; background: #e94560; border-radius: 2px; }
+.sc-dim {
+  margin-bottom: 8px; padding: 10px 12px; border-radius: 8px;
+  background: rgba(255,255,255,.02); border: 1px solid rgba(255,255,255,.03);
+  transition: background .15s; overflow: hidden;
+}
+.sc-dim:hover { background: rgba(255,255,255,.04); }
+.sc-dim-row1 { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.sc-dim-left { display: flex; align-items: center; gap: 8px; }
+.sc-dim-name { font-weight: 600; font-size: 13px; color: #ddd; }
+.sc-dim-wt { font-size: 10px; color: #555; padding: 1px 6px; background: rgba(255,255,255,.04); border-radius: 3px; }
+.sc-dim-val { font-weight: 800; font-size: 16px; font-variant-numeric: tabular-nums; }
+.sc-bar-track {
+  height: 6px; border-radius: 3px; background: #1e1e30; position: relative;
+  overflow: hidden; margin-bottom: 6px;
+}
+.sc-bar-center { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,.08); z-index: 1; }
+.sc-bar-fill {
+  position: absolute; top: 0; height: 100%; border-radius: 3px;
+  transition: width .6s ease, left .6s ease;
+}
+.sc-dim-detail { font-size: 11px; color: #666; line-height: 1.5; }
+.sc-dim-tag {
+  display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px;
+  margin: 2px 2px; background: rgba(255,255,255,.04); color: #888;
+  white-space: normal; word-break: break-all;
+}
+.sc-dim-tag.bull { background: rgba(231,76,60,.12); color: #e74c3c; }
+.sc-dim-tag.bear { background: rgba(46,204,113,.12); color: #2ecc71; }
+.sc-dim-tag.warn { background: rgba(241,196,15,.12); color: #f1c40f; }
+
 /* Intraday modal */
 .intraday-overlay {
   display: none; position: fixed; inset: 0; z-index: 200;
@@ -110,7 +225,23 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
   <div class="info-grid" id="infoGrid"></div>
 </div>
 
+<button id="scoreBtn" onclick="toggleScorePanel()">评分</button>
+<div id="scorePanel" class="score-panel"></div>
 <div id="chart"></div>
+
+<!-- Score Panel -->
+<div class="score-overlay" id="scoreOverlay">
+  <div class="score-box">
+    <div class="score-header">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="color:#e94560;font-size:16px;font-weight:600;" id="scoreTitle">次日操作评分</span>
+        <span style="color:#555;font-size:12px;" id="scoreSubtitle"></span>
+      </div>
+      <button class="close-btn" id="scoreClose">&times;</button>
+    </div>
+    <div id="scoreContent" style="padding:16px;overflow-y:auto;flex:1;"></div>
+  </div>
+</div>
 
 <!-- Global loading -->
 <div class="global-loading" id="globalLoading">
@@ -914,6 +1045,183 @@ document.addEventListener('keydown', function(e) {
 // Get stock code from URL: /stock/600519 -> '600519'
 const code = window.location.pathname.split('/').pop() || '600519';
 loadStock(code);
+
+// === Score Panel ===
+let scoreData = null;
+let _scoreLoading = false;
+
+document.getElementById('scoreClose').addEventListener('click', () => {
+  document.getElementById('scoreOverlay').classList.remove('active');
+});
+document.getElementById('scoreOverlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) document.getElementById('scoreOverlay').classList.remove('active');
+});
+
+async function toggleScorePanel() {
+  const overlay = document.getElementById('scoreOverlay');
+  if (overlay.classList.contains('active')) {
+    overlay.classList.remove('active');
+    return;
+  }
+  if (!currentCode) return;
+  if (_scoreLoading) return;
+  _scoreLoading = true;
+  showLoading('评分计算中...');
+
+  try {
+    const resp = await fetch(`/api/score/${currentCode}`);
+    scoreData = await resp.json();
+    if (scoreData.error) { alert(scoreData.error); return; }
+    renderScorePanel(scoreData);
+    overlay.classList.add('active');
+  } catch(e) {
+    console.error('Score fetch failed:', e);
+  } finally {
+    hideLoading();
+    _scoreLoading = false;
+    _scoreLoading = false;
+  }
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function scoreColor(s) {
+  if (s >= 78) return '#ff4757';  // 强烈买入 - 鲜红
+  if (s >= 63) return '#e74c3c';  // 建议买入 - 红
+  if (s >= 50) return '#f39c12';  // 偏多观望 - 橙
+  if (s >= 40) return '#f1c40f';  // 观望 - 黄
+  if (s >= 25) return '#e67e22';  // 建议卖出 - 深橙
+  return '#2ecc71';               // 强烈卖出 - 绿
+}
+function scoreColorBg(s) {
+  if (s >= 78) return 'rgba(255,71,87,.08)';
+  if (s >= 63) return 'rgba(231,76,60,.08)';
+  if (s >= 50) return 'rgba(243,156,18,.08)';
+  if (s >= 40) return 'rgba(241,196,15,.06)';
+  if (s >= 25) return 'rgba(230,126,34,.06)';
+  return 'rgba(46,204,113,.08)';
+}
+function scoreActionColor(action) {
+  if (action.includes('强烈买入')) return '#ff4757';
+  if (action.includes('建议买入')) return '#e74c3c';
+  if (action.includes('偏多观望')) return '#f39c12';
+  if (action.includes('观望')) return '#f1c40f';
+  if (action.includes('强烈卖出')) return '#2ecc71';
+  if (action.includes('建议卖出')) return '#e67e22';
+  return '#f1c40f';
+}
+
+function gaugeSVG(pct, color) {
+  const r = 42, c = 2 * Math.PI * r;
+  const fill = c * pct / 100;
+  return `<svg viewBox="0 0 100 100" width="100" height="100">
+    <circle class="sc-gauge-bg" cx="50" cy="50" r="${r}"/>
+    <circle class="sc-gauge-fill" cx="50" cy="50" r="${r}"
+      stroke="${color}" stroke-dasharray="${c}" stroke-dashoffset="${c - fill}"
+      style="filter:drop-shadow(0 0 6px ${color})"/>
+  </svg>`;
+}
+
+function renderScorePanel(data) {
+  if (!data || !data.dimensions) return;
+
+  const c = scoreColor(data.total);
+  const ac = scoreActionColor(data.action);
+  const subtitle = data.name ? `${data.code} ${data.name}` : (data.code || '');
+
+  document.getElementById('scoreSubtitle').textContent = subtitle;
+
+  let html = '';
+
+  // ---- Top card: gauge + action ----
+  html += `<div class="sc-top" style="background:${scoreColorBg(data.total)}">
+    <div class="sc-gauge">
+      ${gaugeSVG(data.total, c)}
+      <div class="sc-gauge-txt">
+        <span class="sc-gauge-num" style="color:${c}">${data.total}</span>
+        <span class="sc-gauge-label">综合评分</span>
+      </div>
+    </div>
+    <div class="sc-info">
+      <div class="sc-action" style="color:${ac}">${escHtml(data.action || '-')}</div>
+      <div class="sc-hold">${escHtml(data.hold_advice || '')}</div>
+      <div class="sc-summary">${escHtml((data.summary || '').slice(0, 100))}</div>
+    </div>
+  </div>`;
+
+  // ---- Dimensions ----
+  html += '<div class="sc-sec-title">多维度评分明细</div>';
+
+  for (const dim of data.dimensions) {
+    const s = dim.score;
+    // Dimension bar color: use gradient from score value
+    let barColor;
+    if (s >= 5) barColor = '#e74c3c';
+    else if (s >= 3) barColor = '#f39c12';
+    else if (s > 0) barColor = '#f1c40f';
+    else if (s === 0) barColor = '#555';
+    else if (s >= -3) barColor = '#2ecc71';
+    else if (s >= -5) barColor = '#e67e22';
+    else barColor = '#ff4757';
+
+    const sign = s > 0 ? '+' : '';
+    const barW = Math.abs(s) / 10 * 50; // half-width: 0-50%
+    const barLeft = s >= 0 ? 50 : 50 - barW;
+
+    // Parse detail into tags - handle various separators
+    const detailStr = (dim.detail || '').replace(/; /g, ';');
+    const parts = detailStr.split(';').filter(x => x.trim());
+    const tags = parts.map(p => {
+      p = p.trim();
+      let cls = '';
+      if (p.includes('多头') || p.includes('金叉') || p.includes('放大') || p.includes('放量上涨')
+        || p.includes('超卖') || p.includes('底背离') || p.includes('止跌') || p.includes('阳包阴')
+        || p.includes('强势') || p.includes('支撑') || p.includes('买点') || p.includes('缩量上涨')) cls = 'bull';
+      else if (p.includes('空头') || p.includes('死叉') || p.includes('超买') || p.includes('顶背离')
+        || p.includes('诱多') || p.includes('放量下跌') || p.includes('阴包阳')
+        || p.includes('压力') || p.includes('出货') || p.includes('危险')) cls = 'bear';
+      else if (p.includes('警惕') || p.includes('过热') || p.includes('钝化') || p.includes('假突破')
+        || p.includes('注意风险') || p.includes('诱空')) cls = 'warn';
+      return `<span class="sc-dim-tag ${cls}">${escHtml(p)}</span>`;
+    }).join('');
+
+    html += `<div class="sc-dim">
+      <div class="sc-dim-row1">
+        <div class="sc-dim-left">
+          <span class="sc-dim-name">${escHtml(dim.name)}</span>
+          <span class="sc-dim-wt">${dim.weight}%</span>
+        </div>
+        <span class="sc-dim-val" style="color:${barColor}">${sign}${s}</span>
+      </div>
+      <div class="sc-bar-track">
+        <div class="sc-bar-center"></div>
+        <div class="sc-bar-fill" style="width:${barW}%;left:${barLeft}%;background:linear-gradient(90deg,${barColor}88,${barColor})"></div>
+      </div>
+      <div style="line-height:1.8">${tags}</div>
+    </div>`;
+  }
+
+  document.getElementById('scoreContent').innerHTML = html;
+}
+
+// Keyboard shortcut: S to toggle score
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const scoreOv = document.getElementById('scoreOverlay');
+    if (scoreOv.classList.contains('active')) {
+      scoreOv.classList.remove('active');
+      return;
+    }
+  }
+  if (e.key === 's' || e.key === 'S') {
+    if (e.target.tagName === 'INPUT') return;
+    toggleScorePanel();
+  }
+});
 </script>
 </body>
 </html>

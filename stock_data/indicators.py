@@ -60,6 +60,39 @@ def calc_kdj(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def calc_vwma(df: pd.DataFrame, periods: list[int] | None = None) -> pd.DataFrame:
+    """Calculate Volume-Weighted Moving Average.
+
+    VWMA incorporates volume into the moving average, making it significantly
+    harder for institutional players to manipulate with low-volume price moves.
+    """
+    if periods is None:
+        periods = [5, 10, 20]
+    close = df["close"].fillna(0).to_numpy(dtype=np.float64)
+    vol = df["volume"].fillna(0).to_numpy(dtype=np.float64)
+    pv = close * vol
+    for p in periods:
+        pv_sum = pd.Series(pv).rolling(window=p, min_periods=1).sum()
+        vol_sum = pd.Series(vol).rolling(window=p, min_periods=1).sum()
+        df[f"vwma{p}"] = (pv_sum / vol_sum.replace(0, np.nan)).round(3)
+    return df
+
+
+def calc_bollinger(df: pd.DataFrame, period: int = 20, num_std: float = 2.0) -> pd.DataFrame:
+    """Calculate Bollinger Bands.
+
+    Returns columns: bb_upper, bb_middle, bb_lower, bb_bandwidth
+    Bandwidth is useful for squeeze detection (low bandwidth = potential breakout).
+    """
+    ma = df["close"].rolling(window=period, min_periods=1).mean()
+    std = df["close"].rolling(window=period, min_periods=1).std()
+    df["bb_upper"] = (ma + num_std * std).round(3)
+    df["bb_middle"] = ma.round(3)
+    df["bb_lower"] = (ma - num_std * std).round(3)
+    df["bb_bandwidth"] = ((df["bb_upper"] - df["bb_lower"]) / ma * 100).round(3)
+    return df
+
+
 def calc_volume_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Calculate volume-related indicators."""
     # Fill NaN volume with 0 (suspended days)
@@ -86,6 +119,8 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Calculate and append all technical indicators to the DataFrame."""
     df = df.sort_values("date").reset_index(drop=True)
     df = calc_ma(df)
+    df = calc_vwma(df)
+    df = calc_bollinger(df)
     df = calc_macd(df)
     df = calc_kdj(df)
     df = calc_volume_indicators(df)
