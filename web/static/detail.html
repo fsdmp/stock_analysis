@@ -349,7 +349,18 @@ async function doSearch(q) {
   dropdown.classList.add('show');
 }
 
-const C = {date:0,open:1,close:2,high:3,low:4,vol:5,pct:6,ma5:7,ma7:8,ma10:9,ma20:10,dif:11,dea:12,hist:13,k:14,d:15,j:16};
+let C = {};
+const _COL_ALIASES = {
+  'date':'date','open':'open','close':'close','high':'high','low':'low',
+  'volume':'vol','pct_change':'pct',
+  'ma5':'ma5','ma7':'ma7','ma10':'ma10','ma20':'ma20',
+  'macd_dif':'dif','macd_dea':'dea','macd_hist':'hist',
+  'kdj_k':'k','kdj_d':'d','kdj_j':'j'
+};
+function _buildColMap(columns) {
+  C = {};
+  columns.forEach((col, i) => { if (_COL_ALIASES[col]) C[_COL_ALIASES[col]] = i; });
+}
 function R(rows,i) {
   const r=rows[i];
   return {date:r[C.date],open:r[C.open],close:r[C.close],high:r[C.high],low:r[C.low],
@@ -368,6 +379,7 @@ async function loadStock(code) {
     const stockResp = await fetch(`/api/stock/${code}`);
     rawData = await stockResp.json();
     if (rawData.error) { alert(rawData.error); return; }
+    _buildColMap(rawData.columns);
     currentName = rawData.name || '';
     document.getElementById('stockName').textContent = currentName ? currentName : '';
     document.title = currentName ? `${currentName}(${currentCode}) - A股K线` : `${currentCode} - A股K线`;
@@ -445,16 +457,26 @@ function renderChart() {
       color:s.g?'#f39c12':'#9b59b6', position:s.g?'top':'bottom', distance:4,
       textShadowColor:'rgba(0,0,0,0.6)', textShadowBlur:2}
   }));
-  const macdMP = _mk(sig.macd.filter(s=>s.g),'金叉','#f39c12','top')
-    .concat(_mk(sig.macd.filter(s=>!s.g),'死叉','#9b59b6','bottom'));
-  const macdDivMP = _mk(sig.macdDiv.filter(s=>s.g),'顶背离','#e74c3c','top')
-    .concat(_mk(sig.macdDiv.filter(s=>!s.g),'底背离','#2ecc71','bottom'));
-  const kdjMP = _mk(sig.kdj.filter(s=>s.g),'金叉','#f39c12','top')
-    .concat(_mk(sig.kdj.filter(s=>!s.g),'死叉','#9b59b6','bottom'));
-  const kdjExtMP = _mk(sig.kdjExt.filter(s=>s.g&&!s.dh),'超买','#e74c3c','top')
-    .concat(_mk(sig.kdjExt.filter(s=>!s.g&&!s.dh),'超卖','#2ecc71','bottom'))
-    .concat(_mk(sig.kdjExt.filter(s=>s.g&&s.dh),'钝化','#ff9800','top'))
-    .concat(_mk(sig.kdjExt.filter(s=>!s.g&&s.dh),'钝化','#ff9800','bottom'));
+  // MACD/KDJ signals → dedicated scatter series for explicit grid positioning
+  const _sc = (arr, txt, color, pos) => arr.map(s => ({
+    value:[s.d,s.v], symbol:'circle', symbolSize:1,
+    label:{show:true, formatter:txt, fontSize:9, color, position:pos, distance:4,
+      textShadowColor:'rgba(0,0,0,0.6)', textShadowBlur:2}
+  }));
+  const macdScatter = [].concat(
+    _sc(sig.macd.filter(s=>s.g),'金叉','#f39c12','top'),
+    _sc(sig.macd.filter(s=>!s.g),'死叉','#9b59b6','bottom'),
+    _sc(sig.macdDiv.filter(s=>s.g),'顶背离','#e74c3c','top'),
+    _sc(sig.macdDiv.filter(s=>!s.g),'底背离','#2ecc71','bottom')
+  );
+  const kdjScatter = [].concat(
+    _sc(sig.kdj.filter(s=>s.g),'金叉','#f39c12','top'),
+    _sc(sig.kdj.filter(s=>!s.g),'死叉','#9b59b6','bottom'),
+    _sc(sig.kdjExt.filter(s=>s.g&&!s.dh),'超买','#e74c3c','top'),
+    _sc(sig.kdjExt.filter(s=>!s.g&&!s.dh),'超卖','#2ecc71','bottom'),
+    _sc(sig.kdjExt.filter(s=>s.g&&s.dh),'钝化','#ff9800','top'),
+    _sc(sig.kdjExt.filter(s=>!s.g&&s.dh),'钝化','#ff9800','bottom')
+  );
   const volMP = _mk(sig.vol.filter(s=>s.g===3),'天量','#ff4444','top')
     .concat(_mk(sig.vol.filter(s=>s.g===1),'巨量','#e74c3c','top'))
     .concat(_mk(sig.vol.filter(s=>s.g===0),'地量','#2ecc71','top'));
@@ -592,13 +614,15 @@ function renderChart() {
       {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:vols,
         markPoint:(volMP.length||volPriceMP.length)?{data:volMP.concat(volPriceMP),animation:false,silent:true}:undefined},
       {name:'MACD柱',type:'bar',xAxisIndex:2,yAxisIndex:2,data:hist},
-      {name:'DIF',type:'line',xAxisIndex:2,yAxisIndex:2,data:dif,symbol:'none',silent:true,lineStyle:{width:1,color:'#f1c40f'},
-        markPoint:(macdMP.length||macdDivMP.length)?{data:macdMP.concat(macdDivMP),animation:false,silent:true}:undefined},
+      {name:'DIF',type:'line',xAxisIndex:2,yAxisIndex:2,data:dif,symbol:'none',silent:true,lineStyle:{width:1,color:'#f1c40f'}},
       {name:'DEA',type:'line',xAxisIndex:2,yAxisIndex:2,data:dea,symbol:'none',silent:true,lineStyle:{width:1,color:'#3498db'}},
-      {name:'K',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjK,symbol:'none',silent:true,lineStyle:{width:1,color:'#f1c40f'},
-        markPoint:(kdjMP.length||kdjExtMP.length)?{data:kdjMP.concat(kdjExtMP),animation:false,silent:true}:undefined},
+      {name:'K',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjK,symbol:'none',silent:true,lineStyle:{width:1,color:'#f1c40f'}},
       {name:'D',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjD,symbol:'none',silent:true,lineStyle:{width:1,color:'#3498db'}},
       {name:'J',type:'line',xAxisIndex:3,yAxisIndex:3,data:kdjJ,symbol:'none',silent:true,lineStyle:{width:1,color:'#e74c3c'}},
+      {name:'MACD信号',type:'scatter',xAxisIndex:2,yAxisIndex:2,data:macdScatter,
+        symbol:'circle',symbolSize:1,itemStyle:{color:'transparent'},silent:true,tooltip:{show:false},animation:false},
+      {name:'KDJ信号',type:'scatter',xAxisIndex:3,yAxisIndex:3,data:kdjScatter,
+        symbol:'circle',symbolSize:1,itemStyle:{color:'transparent'},silent:true,tooltip:{show:false},animation:false},
     ],
   }, true);
 }
