@@ -10,17 +10,18 @@ Core principles:
   3. Aggressive scoring for differentiation
      - tanh normalization spreads scores, avoids clustering at 50
 
-Dimensions (weighted for short-term):
-  1. 短期动量  (20)  - most important for 1-3 day decisions
-  2. 量价配合  (18)  - validates all moves
-  3. MA趋势   (12)  - with VWMA anti-trap
-  4. 主力行为  (12)  - smart money detection
-  5. MACD动能  (10)  - useful but lagging
-  6. KDJ状态   (10)  - trend-contextualized
-  7. 支撑压力   (8)  - near-term levels
-  8. 背离信号   (5)  - divergence
-  9. 均线形态   (3)  - setup indicator
- 10. 趋势确认   (2)  - meta filter
+Dimensions (weighted for short-term, total=100):
+  1. 短期动量  (20)  - core for 1-3 day decisions
+  2. 换手率    (15)  - key short-term participation indicator
+  3. 量价配合  (15)  - validates all moves
+  4. KDJ状态   (13)  - sensitive short-term oscillator
+  5. 主力行为  (10)  - smart money detection
+  6. MA趋势    (7)  - with VWMA anti-trap
+  7. 支撑压力   (7)  - near-term levels
+  8. MACD动能   (5)  - useful but lagging
+  9. 背离信号   (4)  - divergence
+ 10. 均线形态   (2)  - setup indicator
+ 11. 趋势确认   (2)  - meta filter
 """
 
 import numpy as np
@@ -858,11 +859,18 @@ def _score_momentum(df, n, trend):
         else:
             break
     if streak >= 5:
-        score -= 1 if trend >= 1 else 0
-        details.append(f"连阳{streak}日(连涨过多)")
-    elif streak >= 3:
-        score += 0 if trend >= 1 else 0
-        details.append(f"连阳{streak}日(偏高)")
+        score -= 3
+        details.append(f"连阳{streak}日(追高风险极大)")
+    elif streak >= 4:
+        score -= 2 if trend >= 1 else 0
+        details.append(f"连阳{streak}日(连涨偏高)")
+    elif streak == 3:
+        if trend >= 1:
+            score -= 1
+            details.append("连阳3日(注意获利盘)")
+        else:
+            score += 1
+            details.append("连阳3日(反弹)")
     elif streak == 2:
         score += 2 if trend >= 1 else 1
         details.append("连阳2日(趋势确立中)")
@@ -870,11 +878,35 @@ def _score_momentum(df, n, trend):
         score += 1
         details.append("首日上涨(启动)")
     if streak <= -5:
-        score += 0 if trend <= -1 else 1
-        details.append(f"连阴{abs(streak)}日(超跌)")
+        if trend >= 1:
+            score += 2
+            details.append(f"连阴{abs(streak)}日(超跌买点)")
+        elif trend <= -1:
+            score -= 1
+            details.append(f"连阴{abs(streak)}日(恐慌下跌)")
+        else:
+            score += 1
+            details.append(f"连阴{abs(streak)}日(超跌)")
+    elif streak <= -4:
+        if trend >= 1:
+            score += 2
+            details.append(f"连阴{abs(streak)}日(回调买点)")
+        elif trend <= -1:
+            score -= 2
+            details.append(f"连阴{abs(streak)}日(弱势)")
+        else:
+            score += 1
+            details.append(f"连阴{abs(streak)}日(偏弱)")
     elif streak <= -3:
-        score -= 3 if trend <= -1 else 1
-        details.append(f"连阴{abs(streak)}日" + ("(趋势配合)" if trend <= -1 else ""))
+        if trend >= 1:
+            score += 1
+            details.append(f"连阴{abs(streak)}日(洗盘)")
+        elif trend <= -1:
+            score -= 2
+            details.append(f"连阴{abs(streak)}日(趋势配合)")
+        else:
+            score -= 1
+            details.append(f"连阴{abs(streak)}日(偏弱)")
 
     # 3-day cumulative (trend-contextualized: penalize chasing, reward pullbacks)
     if n >= 4 and close[n - 4] > 0:
@@ -984,6 +1016,206 @@ def _score_momentum(df, n, trend):
         if amp > 7 and close[n - 1] < df["open"].values[n - 1]:
             score -= 2 if trend <= -1 else 1
             details.append("高振幅收阴")
+
+    return _clamp(score), "; ".join(details)
+
+
+def _score_turnover(df, n, trend):
+    """换手率分析 — 超短线核心维度.
+
+    换手率反映市场参与度和资金活跃度：
+    - 高换手+涨 = 游资接力/主力进攻 (短多)
+    - 高换手+跌 = 出货/恐慌 (短空)
+    - 低换手+涨 = 一致性强/主力控盘 (偏多)
+    - 低换手+跌 = 无人问津 (偏空)
+    - 换手率突变 = 变盘信号
+    """
+    score, details = 0, []
+
+    turnover_col = "turnover" if "turnover" in df.columns else None
+    if turnover_col is None:
+        return 0, "无换手率数据"
+
+    turn = _safe(df, n - 1, "turnover")
+    if not _v(turn):
+        return 0, "换手率数据缺失"
+
+    pct = _safe(df, n - 1, "pct_change")
+    pv = float(pct) if _v(pct) else 0
+
+    # --- 1. 今日换手率绝对水平 (超短线阈值，面向活跃标的) ---
+    if turn > 20:
+        # 极度活跃：游资激烈博弈
+        if pv > 5:
+            score += 5
+            details.append(f"超高换手{turn:.1f}%+大涨(游资进攻)")
+        elif pv < -5:
+            score -= 5
+            details.append(f"超高换手{turn:.1f}%+大跌(恐慌出货)")
+        elif pv > 0:
+            score += 2
+            details.append(f"超高换手{turn:.1f}%(极度活跃)")
+        else:
+            score -= 2
+            details.append(f"超高换手{turn:.1f}%(方向偏空)")
+    elif turn > 10:
+        # 高换手：超短活跃票的正常区间
+        if pv > 3:
+            score += 4 if trend >= 1 else 2
+            details.append(f"高换手{turn:.1f}%+上涨" + ("(主力进攻)" if trend >= 1 else "(反弹)"))
+        elif pv < -3:
+            score -= 4
+            details.append(f"高换手{turn:.1f}%+下跌(资金出逃)")
+        elif abs(pv) <= 1:
+            if trend >= 1:
+                score += 1
+                details.append(f"高换手{turn:.1f}%+整理(上升趋势蓄力)")
+            elif trend <= -1:
+                score -= 2
+                details.append(f"高换手{turn:.1f}%+滞涨(弱势整理)")
+            else:
+                details.append(f"高换手{turn:.1f}%(变盘前兆)")
+        else:
+            score += 1 if pv > 0 else -1
+            details.append(f"高换手{turn:.1f}%")
+    elif turn > 4:
+        # 适度换手
+        if pv > 2:
+            score += 2
+            details.append(f"适度换手{turn:.1f}%+上涨(健康)")
+        elif pv < -2:
+            score -= 2
+            details.append(f"适度换手{turn:.1f}%+下跌")
+        else:
+            score += 1
+            details.append(f"换手{turn:.1f}%(正常)")
+    elif turn > 2:
+        # 偏低换手
+        if pv > 2:
+            score += 3 if trend >= 1 else 1
+            details.append("低换手+上涨" + ("(主力控盘/一致性强)" if trend >= 1 else ""))
+        elif pv < -2:
+            score -= 1
+            details.append(f"低换手{turn:.1f}%+下跌(无人接盘)")
+        else:
+            details.append(f"低换手{turn:.1f}%(清淡)")
+    else:
+        # 地量换手
+        if pv > 0:
+            score += 2
+            details.append(f"地量换手{turn:.1f}%(锁仓/启动前兆)")
+        elif pv < -3:
+            score -= 1
+            details.append(f"地量换手{turn:.1f}%+下跌(流动性差)")
+        else:
+            details.append(f"地量{turn:.1f}%")
+
+    # --- 2. 换手率变化 (今日 vs 5日均换手) ---
+    if n >= 6:
+        turn_5d = []
+        for i in range(max(0, n - 6), n - 1):
+            tv = _safe(df, i, "turnover")
+            if _v(tv):
+                turn_5d.append(tv)
+        if turn_5d:
+            avg_turn = np.mean(turn_5d)
+            if avg_turn > 0:
+                turn_ratio = turn / avg_turn
+                if turn_ratio > 3:
+                    # 换手率突然放大3倍以上
+                    if pv > 2:
+                        score += 3
+                        details.append(f"换手暴增{turn_ratio:.1f}倍(资金涌入)")
+                    elif pv < -2:
+                        score -= 3
+                        details.append(f"换手暴增{turn_ratio:.1f}倍(资金出逃)")
+                    else:
+                        score -= 1
+                        details.append(f"换手暴增{turn_ratio:.1f}倍(方向不明)")
+                elif turn_ratio > 2:
+                    if pv > 1:
+                        score += 2
+                        details.append(f"换手放大{turn_ratio:.1f}倍(关注)")
+                    elif pv < -1:
+                        score -= 2
+                        details.append(f"换手放大{turn_ratio:.1f}倍(抛压)")
+                elif turn_ratio < 0.5:
+                    # 换手骤降
+                    if trend >= 1 and pv > 0:
+                        score += 1
+                        details.append("换手骤降+上涨(缩量上攻)")
+                    elif trend <= -1:
+                        score -= 1
+                        details.append("换手骤降(无人接盘)")
+
+    # --- 3. 涨停板换手分析 (超短线核心) ---
+    if pv >= 9.5:
+        if turn < 5:
+            score += 4
+            details.append(f"缩量涨停(换手{turn:.1f}%,一致性极强)")
+        elif turn < 10:
+            score += 2
+            details.append(f"适度涨停(换手{turn:.1f}%)")
+        elif turn < 20:
+            score += 1
+            details.append(f"活跃涨停(换手{turn:.1f}%)")
+        elif turn < 30:
+            score -= 1
+            details.append(f"放量涨停(换手{turn:.1f}%,有分歧)")
+        else:
+            score -= 3
+            details.append(f"巨量涨停(换手{turn:.1f}%,严重分歧)")
+    elif pv <= -9.5:
+        if turn > 15:
+            score -= 3
+            details.append(f"放量跌停(换手{turn:.1f}%,恐慌)")
+        elif turn < 3:
+            score -= 2
+            details.append(f"缩量跌停(换手{turn:.1f}%,封死)")
+
+    # --- 4. 连续高换手 ---
+    if n >= 3:
+        high_turn_days = 0
+        for i in range(n - 3, n):
+            tv = _safe(df, i, "turnover")
+            if _v(tv) and tv > 10:
+                high_turn_days += 1
+        if high_turn_days >= 3:
+            if trend >= 1:
+                score -= 2
+                details.append("连续3日高换手(获利盘积累)")
+            elif trend <= -1:
+                score -= 3
+                details.append("连续3日高换手(持续出货)")
+
+    # --- 5. 换手率递增/递减趋势 ---
+    if n >= 4:
+        t3 = _safe(df, n - 4, "turnover")
+        t2 = _safe(df, n - 3, "turnover")
+        t1 = _safe(df, n - 2, "turnover")
+        t0 = _safe(df, n - 1, "turnover")
+        if all(_v(x) for x in [t3, t2, t1, t0]) and t3 > 0:
+            increasing = t3 < t2 < t1 < t0
+            decreasing = t3 > t2 > t1 > t0
+            close = df["close"].values
+            price_up = close[n - 1] > close[n - 4]
+            if increasing:
+                if price_up and trend >= 1:
+                    score += 3
+                    details.append("换手递增+价涨(主升浪确认)")
+                elif price_up:
+                    score += 1
+                    details.append("换手递增+价涨(关注)")
+                elif not price_up and trend <= -1:
+                    score -= 2
+                    details.append("换手递增+价跌(放量下跌)")
+            elif decreasing:
+                if price_up and trend >= 1:
+                    score += 2
+                    details.append("换手递减+价涨(缩量上攻)")
+                elif not price_up:
+                    score -= 2
+                    details.append("换手递减+价跌(动能衰竭)")
 
     return _clamp(score), "; ".join(details)
 
@@ -1260,23 +1492,24 @@ def calc_score(df: pd.DataFrame) -> dict:
 
     scorers = [
         ("短期动量", 20, _score_momentum, (df, n, trend)),
-        ("量价配合", 18, _score_volume, (df, n, trend)),
-        ("MA趋势", 12, _score_ma_trend, (df, n, trend)),
-        ("主力行为", 12, _score_smart_money, (df, n, trend)),
-        ("MACD动能", 10, _score_macd, (df, n, trend)),
-        ("KDJ状态", 10, _score_kdj, (df, n, trend)),
-        ("支撑压力", 8, _score_sr, (df, n, zones, trend)),
-        ("背离信号", 5, _score_divergence, (df, n, signals, trend)),
-        ("均线形态", 3, _score_squeeze, (df, n, trend)),
+        ("换手率", 15, _score_turnover, (df, n, trend)),
+        ("量价配合", 15, _score_volume, (df, n, trend)),
+        ("KDJ状态", 13, _score_kdj, (df, n, trend)),
+        ("主力行为", 10, _score_smart_money, (df, n, trend)),
+        ("MA趋势", 7, _score_ma_trend, (df, n, trend)),
+        ("支撑压力", 7, _score_sr, (df, n, zones, trend)),
+        ("MACD动能", 5, _score_macd, (df, n, trend)),
+        ("背离信号", 4, _score_divergence, (df, n, signals, trend)),
+        ("均线形态", 2, _score_squeeze, (df, n, trend)),
         ("趋势确认", 2, _score_meta, (df, n, dim_raw, trend)),
     ]
 
-    for name, weight, fn, args in scorers[:9]:
+    for name, weight, fn, args in scorers[:10]:
         s, d = fn(*args)
         dim_raw.append(s)
         dim_scores.append({"name": name, "score": s, "detail": d, "weight": weight})
 
-    name, weight, fn, args = scorers[9]
+    name, weight, fn, args = scorers[10]
     s, d = fn(*args)
     dim_scores.append({"name": name, "score": s, "detail": d, "weight": weight})
 
@@ -1286,8 +1519,8 @@ def calc_score(df: pd.DataFrame) -> dict:
     max_raw = total_weight * 10
 
     raw_ratio = total_raw / max_raw if max_raw > 0 else 0
-    # tanh spreads scores: ratio=0.1→~62, ratio=0.2→~74, ratio=-0.1→~38
-    normalized = 50 + 50 * np.tanh(2.5 * raw_ratio)
+    # tanh spreads scores: ratio=0.1→~67, ratio=0.2→~80, ratio=-0.1→~33
+    normalized = 50 + 50 * np.tanh(3.5 * raw_ratio)
     normalized = max(0, min(100, round(normalized)))
 
     action, hold_advice, summary = _make_advice(normalized, dim_scores, df, n, trend)

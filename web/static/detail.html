@@ -352,7 +352,7 @@ async function doSearch(q) {
 let C = {};
 const _COL_ALIASES = {
   'date':'date','open':'open','close':'close','high':'high','low':'low',
-  'volume':'vol','pct_change':'pct',
+  'volume':'vol','pct_change':'pct','turnover':'turn',
   'ma5':'ma5','ma7':'ma7','ma10':'ma10','ma20':'ma20',
   'macd_dif':'dif','macd_dea':'dea','macd_hist':'hist',
   'kdj_k':'k','kdj_d':'d','kdj_j':'j'
@@ -364,7 +364,7 @@ function _buildColMap(columns) {
 function R(rows,i) {
   const r=rows[i];
   return {date:r[C.date],open:r[C.open],close:r[C.close],high:r[C.high],low:r[C.low],
-    vol:r[C.vol],pct:r[C.pct],ma5:r[C.ma5],ma7:r[C.ma7],ma10:r[C.ma10],ma20:r[C.ma20],
+    vol:r[C.vol],pct:r[C.pct],turn:r[C.turn],ma5:r[C.ma5],ma7:r[C.ma7],ma10:r[C.ma10],ma20:r[C.ma20],
     dif:r[C.dif],dea:r[C.dea],hist:r[C.hist],k:r[C.k],d:r[C.d],j:r[C.j]};
 }
 
@@ -415,12 +415,13 @@ function renderInfo() {
 
   document.getElementById('priceArea').innerHTML =
     `<span class="price ${cls}">${d.close.toFixed(2)}</span>` +
-    `<span class="chg ${cls}">${s}${chg} (${s}${pct.toFixed(2)}%)</span>`;
+    `<span class="chg ${cls}">${s}${chg} (${s}${pct.toFixed(2)}%)</span>` +
+    `<span class="chg" style="color:#e67e22;margin-left:8px">换手 ${d.turn!=null?d.turn.toFixed(2):'-'}%</span>`;
 
   const g = (l, v, c) => `<span class="g"><span class="l">${l}</span><span class="v" ${c?'style="color:'+c+'"':''}>${v}</span></span>`;
   const sep = '<span class="sep"></span>';
   document.getElementById('infoGrid').innerHTML =
-    g('开', d.open.toFixed(2)) + g('高', d.high.toFixed(2)) + g('低', d.low.toFixed(2)) + g('量', fmtVol(d.vol)) + sep +
+    g('开', d.open.toFixed(2)) + g('高', d.high.toFixed(2)) + g('低', d.low.toFixed(2)) + g('量', fmtVol(d.vol)) + g('换手', d.turn!=null?(d.turn.toFixed(2)+'%'):'-', '#e67e22') + sep +
     g('MA5', d.ma5?.toFixed(2)||'-', MA_C[0]) + g('MA10', d.ma10?.toFixed(2)||'-', MA_C[2]) + g('MA20', d.ma20?.toFixed(2)||'-', MA_C[3]) + sep +
     g('DIF', d.dif?.toFixed(3)||'-','#f1c40f') + g('DEA', d.dea?.toFixed(3)||'-','#3498db') + g('MACD', d.hist?.toFixed(3)||'-') + sep +
     g('K', d.k?.toFixed(3)||'-','#f1c40f') + g('D', d.d?.toFixed(3)||'-','#3498db') + g('J', d.j?.toFixed(3)||'-','#e74c3c');
@@ -568,7 +569,10 @@ function renderChart() {
           <tr>
             <td style="${lb}">收</td><td style="${vl(c)}">${d.close.toFixed(2)}</td>
             <td style="${lb};padding-left:10px">量</td><td style="${vl()}">${fmtVol(d.vol)}</td>
-            <td style="${lb};padding-left:10px">幅</td><td style="${vl(c)}">${pct>=0?'+':''}${pct.toFixed(2)}%</td>
+            <td style="${lb};padding-left:10px">换手</td><td style="${vl('#e67e22')}">${d.turn!=null?d.turn.toFixed(2)+'%':'-'}</td>
+          </tr>
+          <tr>
+            <td style="${lb}">幅</td><td style="${vl(c)}">${pct>=0?'+':''}${pct.toFixed(2)}%</td>
           </tr>
           <tr><td colspan="6" style="padding-top:2px;border-top:1px solid #2a2a4a"></td></tr>
           <tr>

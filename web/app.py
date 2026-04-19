@@ -126,7 +126,7 @@ def api_stock(code):
         return jsonify({"error": f"Stock {code} not found"}), 404
 
     cols = [
-        "date", "open", "close", "high", "low", "volume", "pct_change",
+        "date", "open", "close", "high", "low", "volume", "pct_change", "turnover",
         "ma5", "ma7", "ma10", "ma20",
         "vwma5", "vwma10", "vwma20",
         "bb_upper", "bb_middle", "bb_lower", "bb_bandwidth",
@@ -230,7 +230,7 @@ def api_score(code):
 
     from stock_data.scoring import calc_score
     cols = [
-        "date", "open", "close", "high", "low", "volume", "pct_change",
+        "date", "open", "close", "high", "low", "volume", "pct_change", "turnover",
         "ma5", "ma7", "ma10", "ma20",
         "vwma5", "vwma10", "vwma20",
         "bb_upper", "bb_middle", "bb_lower", "bb_bandwidth",
@@ -273,7 +273,7 @@ def api_batch_score():
 
         try:
             cols = [
-                "date", "open", "close", "high", "low", "volume", "pct_change",
+                "date", "open", "close", "high", "low", "volume", "pct_change", "turnover",
                 "ma5", "ma7", "ma10", "ma20",
                 "vwma5", "vwma10", "vwma20",
                 "bb_upper", "bb_middle", "bb_lower", "bb_bandwidth",
