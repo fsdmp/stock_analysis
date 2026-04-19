@@ -118,6 +118,15 @@ body {
 }
 .ov-text { font-size: 14px; color: #888; }
 .ov-sub { font-size: 12px; color: #555; margin-top: 6px; }
+.ov-prog { width: 280px; height: 6px; background: #0f3460; border-radius: 3px; overflow: hidden; margin-top: 14px; }
+.ov-prog > div { height: 100%; background: #e94560; border-radius: 3px; transition: width .3s ease; }
+.ov-found { font-size: 13px; color: #e94560; margin-top: 8px; font-weight: 600; display: none; }
+.ov-found.active { display: block; }
+
+/* Scan card */
+.scan-divider { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+.scan-divider .line { flex: 1; height: 1px; background: #0f3460; }
+.scan-divider span { font-size: 12px; color: #444; white-space: nowrap; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Results */
@@ -273,6 +282,28 @@ body {
     </div>
   </div>
 
+  <!-- Full Scan -->
+  <div class="scan-divider"><div class="line"></div><span>或</span><div class="line"></div></div>
+  <div class="input-card">
+    <div style="margin-bottom:12px;">
+      <div style="font-size:15px; font-weight:600; color:#e0e0e0;">全量股票扫描</div>
+      <div style="font-size:12px; color:#555; margin-top:3px;">扫描全市场股票，筛选高分标的并排序展示</div>
+    </div>
+    <div class="input-actions">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:13px; color:#888;">最低评分</span>
+        <input type="number" id="minScore" value="95" min="50" max="100"
+          style="width:70px; padding:7px 10px; background:#1a1a2e; border:1px solid #0f3460;
+          border-radius:6px; color:#e0e0e0; font-size:14px; text-align:center; outline:none;">
+      </div>
+      <button class="btn-go" id="btnScan" onclick="doFullScan()">
+        <span class="btn-spin"></span>
+        <span class="btn-text">开始扫描</span>
+      </button>
+      <span class="hint" id="scanHint"></span>
+    </div>
+  </div>
+
   <!-- Results -->
   <div class="result-wrap" id="resultWrap" style="display:none;">
     <div class="result-title"><span id="resultTitle"></span></div>
@@ -291,6 +322,8 @@ body {
   <div class="ov-spin"></div>
   <div class="ov-text" id="ovText">正在分析评分...</div>
   <div class="ov-sub" id="ovSub"></div>
+  <div class="ov-prog" id="ovProg" style="display:none"><div id="ovProgBar" style="width:0%"></div></div>
+  <div class="ov-found" id="ovFound"></div>
 </div>
 
 <script>
@@ -513,6 +546,81 @@ function renderResults(results) {
 function toggleExp(code) {
   const el = document.getElementById('exp-' + code);
   if (el) el.classList.toggle('active');
+}
+
+// === Full Scan ===
+let scanTimer = null;
+
+async function doFullScan() {
+  const minScore = parseInt(document.getElementById('minScore').value) || 95;
+  const btn = document.getElementById('btnScan');
+  btn.classList.add('loading');
+  btn.disabled = true;
+
+  const ov = document.getElementById('overlay');
+  document.getElementById('ovText').textContent = '正在全量扫描...';
+  document.getElementById('ovSub').textContent = '准备中...';
+  const prog = document.getElementById('ovProg');
+  const progBar = document.getElementById('ovProgBar');
+  const found = document.getElementById('ovFound');
+  prog.style.display = 'block';
+  progBar.style.width = '0%';
+  found.classList.remove('active');
+  ov.classList.add('active');
+
+  try {
+    const resp = await fetch('/api/full-scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ min_score: minScore }),
+    });
+    await resp.json();
+    scanTimer = setInterval(pollScanStatus, 800);
+  } catch (err) {
+    alert('启动扫描失败: ' + err.message);
+    btn.classList.remove('loading');
+    btn.disabled = false;
+    ov.classList.remove('active');
+    prog.style.display = 'none';
+  }
+}
+
+async function pollScanStatus() {
+  try {
+    const resp = await fetch('/api/full-scan/status');
+    const d = await resp.json();
+    const pct = d.total > 0 ? (d.current / d.total * 100).toFixed(1) : 0;
+    document.getElementById('ovSub').textContent = `${d.current} / ${d.total} — ${d.code}`;
+    document.getElementById('ovProgBar').style.width = pct + '%';
+    if (d.found > 0) {
+      const f = document.getElementById('ovFound');
+      f.textContent = `已发现 ${d.found} 只高分股票`;
+      f.classList.add('active');
+    }
+    if (!d.running && d.done) {
+      clearInterval(scanTimer);
+      scanTimer = null;
+      document.getElementById('overlay').classList.remove('active');
+      document.getElementById('ovProg').style.display = 'none';
+      document.getElementById('ovFound').classList.remove('active');
+      document.getElementById('btnScan').classList.remove('loading');
+      document.getElementById('btnScan').disabled = false;
+      document.getElementById('scanHint').textContent = `扫描完成，发现 ${d.results.length} 只`;
+      if (d.results.length) {
+        renderResults(d.results);
+      } else {
+        document.getElementById('emptyState').style.display = 'none';
+        const wrap = document.getElementById('resultWrap');
+        wrap.style.display = '';
+        document.getElementById('resultTitle').innerHTML =
+          `<strong>全量扫描结果</strong> 评分≥${d.min_score} 的股票共 <strong>0</strong> 只`;
+        document.getElementById('resultList').innerHTML =
+          '<div style="text-align:center;padding:60px 24px;color:#555;font-size:13px;">未发现符合条件的股票，可尝试降低最低评分</div>';
+      }
+    }
+  } catch (err) {
+    console.error('Poll error:', err);
+  }
 }
 </script>
 </body>

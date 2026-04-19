@@ -4,6 +4,7 @@ import sys
 import json
 import atexit
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -24,6 +25,11 @@ atexit.register(bs_shutdown)
 _stock_index: dict = {}
 _stock_names: dict = {}  # code -> name mapping
 _update_status = {"running": False, "message": "", "current": 0, "total": 0, "code": ""}
+_full_scan_status = {
+    "running": False, "done": False, "message": "",
+    "current": 0, "total": 0, "code": "",
+    "results": [], "min_score": 95,
+}
 
 
 def build_stock_names(use_cache=True):
@@ -300,6 +306,109 @@ def api_batch_score():
 
     results.sort(key=lambda x: x.get("total", 0) if "total" in x else -1, reverse=True)
     return jsonify(results)
+
+
+@app.route("/api/full-scan", methods=["POST"])
+def api_full_scan():
+    """Start full market scan for high-score stocks in background."""
+    if _full_scan_status["running"]:
+        return jsonify({"status": "already_running", "message": "扫描正在进行中"})
+
+    data = request.get_json(silent=True) or {}
+    min_score = int(data.get("min_score", 95))
+    min_score = max(0, min(100, min_score))
+
+    def run_scan():
+        import os
+        _full_scan_status.update({
+            "running": True, "done": False, "results": [],
+            "min_score": min_score, "current": 0, "total": 0,
+            "code": "", "message": "正在扫描...",
+        })
+
+        files = sorted(DATA_DIR.glob("*.parquet"))
+        # Pre-filter: skip stocks with close > 100
+        files = [f for f in files if _stock_index.get(f.stem, {}).get("close", 0) <= 100]
+        _full_scan_status["total"] = len(files)
+
+        from stock_data.scoring import calc_score
+
+        _scan_cols = [
+            "date", "open", "close", "high", "low", "volume",
+            "pct_change", "turnover",
+            "ma5", "ma7", "ma10", "ma20",
+            "vwma5", "vwma10", "vwma20",
+            "bb_upper", "bb_middle", "bb_lower", "bb_bandwidth",
+            "macd_dif", "macd_dea", "macd_hist",
+            "kdj_k", "kdj_d", "kdj_j",
+        ]
+
+        def _score_one(f):
+            code = f.stem
+            try:
+                pf = pq.ParquetFile(f)
+                available = set(pf.schema.names)
+                cols = [c for c in _scan_cols if c in available]
+                df = pd.read_parquet(f, columns=cols)
+                if len(df) < 30:
+                    return None
+                result = calc_score(df)
+                if result["total"] >= min_score:
+                    result["code"] = code
+                    result["name"] = _stock_names.get(code, "")
+                    result["close"] = round(float(df["close"].iloc[-1]), 2)
+                    result["pct_change"] = round(
+                        float(df["pct_change"].iloc[-1] or 0), 2
+                    )
+                    return result
+            except Exception:
+                pass
+            return None
+
+        workers = min(os.cpu_count() or 4, 8)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_score_one, f): f for f in files}
+            for future in as_completed(futures):
+                code = futures[future].stem
+                _full_scan_status["current"] += 1
+                _full_scan_status["code"] = code
+                try:
+                    r = future.result()
+                    if r:
+                        _full_scan_status["results"].append(r)
+                except Exception:
+                    pass
+
+        _full_scan_status["results"].sort(
+            key=lambda x: x.get("total", 0), reverse=True
+        )
+        _full_scan_status["running"] = False
+        _full_scan_status["done"] = True
+        _full_scan_status["message"] = (
+            f"扫描完成，{len(_full_scan_status['results'])} 只股票评分≥{min_score}"
+        )
+
+    t = threading.Thread(target=run_scan, daemon=True)
+    t.start()
+    return jsonify({"status": "started", "message": "全量扫描已启动"})
+
+
+@app.route("/api/full-scan/status")
+def api_full_scan_status():
+    """Check full scan progress."""
+    status = {
+        "running": _full_scan_status["running"],
+        "done": _full_scan_status["done"],
+        "message": _full_scan_status["message"],
+        "current": _full_scan_status["current"],
+        "total": _full_scan_status["total"],
+        "code": _full_scan_status["code"],
+        "min_score": _full_scan_status["min_score"],
+        "found": len(_full_scan_status["results"]),
+    }
+    if _full_scan_status["done"]:
+        status["results"] = list(_full_scan_status["results"])
+    return jsonify(status)
 
 
 @app.route("/api/update", methods=["POST"])
