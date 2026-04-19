@@ -87,6 +87,11 @@ def page_detail(code):
     return send_from_directory("static", "detail.html")
 
 
+@app.route("/recommend")
+def page_recommend():
+    return send_from_directory("static", "recommend.html")
+
+
 # === APIs ===
 
 @app.route("/api/stocks")
@@ -243,6 +248,58 @@ def api_score(code):
     result["name"] = _stock_names.get(code, "")
     result["close"] = round(float(df["close"].iloc[-1]), 2)
     return jsonify(result)
+
+
+@app.route("/api/batch-score", methods=["POST"])
+def api_batch_score():
+    """Score multiple stocks and return ranked results."""
+    codes = request.get_json(silent=True) or []
+    if not codes or not isinstance(codes, list):
+        return jsonify({"error": "请提供股票代码列表"}), 400
+
+    codes = [c.zfill(6) for c in codes if isinstance(c, str) and c.strip()]
+    if not codes:
+        return jsonify({"error": "无有效股票代码"}), 400
+
+    results = []
+    for code in codes:
+        path = DATA_DIR / f"{code}.parquet"
+        if not path.exists():
+            results.append({
+                "code": code, "name": _stock_names.get(code, ""),
+                "error": "未找到数据",
+            })
+            continue
+
+        try:
+            cols = [
+                "date", "open", "close", "high", "low", "volume", "pct_change",
+                "ma5", "ma7", "ma10", "ma20",
+                "vwma5", "vwma10", "vwma20",
+                "bb_upper", "bb_middle", "bb_lower", "bb_bandwidth",
+                "macd_dif", "macd_dea", "macd_hist",
+                "kdj_k", "kdj_d", "kdj_j",
+            ]
+            pf = pq.ParquetFile(path)
+            available = set(pf.schema.names)
+            cols = [c for c in cols if c in available]
+
+            df = pd.read_parquet(path, columns=cols)
+            from stock_data.scoring import calc_score
+            result = calc_score(df)
+            result["code"] = code
+            result["name"] = _stock_names.get(code, "")
+            result["close"] = round(float(df["close"].iloc[-1]), 2)
+            result["pct_change"] = round(float(df["pct_change"].iloc[-1] or 0), 2)
+            results.append(result)
+        except Exception as e:
+            results.append({
+                "code": code, "name": _stock_names.get(code, ""),
+                "error": str(e),
+            })
+
+    results.sort(key=lambda x: x.get("total", 0) if "total" in x else -1, reverse=True)
+    return jsonify(results)
 
 
 @app.route("/api/update", methods=["POST"])

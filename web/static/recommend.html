@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>股票推荐排序 - A股数据分析平台</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e; color: #e0e0e0;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  min-height: 100vh; display: flex; flex-direction: column;
+}
+
+/* Nav */
+.nav {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 24px; background: #16213e; border-bottom: 1px solid #0f3460;
+}
+.back-btn {
+  padding: 5px 12px; background: transparent; border: 1px solid #333;
+  border-radius: 6px; color: #888; font-size: 13px; cursor: pointer; transition: all .2s;
+}
+.back-btn:hover { border-color: #e94560; color: #e94560; }
+.nav-title { font-size: 16px; color: #e0e0e0; font-weight: 600; }
+
+/* Container */
+.container { max-width: 880px; margin: 0 auto; padding: 28px 24px; width: 100%; }
+
+/* Input card */
+.input-card {
+  background: #16213e; border-radius: 12px; padding: 20px 24px;
+  border: 1px solid #0f3460; margin-bottom: 24px;
+}
+.input-label {
+  font-size: 13px; color: #888; margin-bottom: 10px;
+}
+
+/* Tag input */
+.tag-wrap {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  min-height: 46px; padding: 8px 12px; background: #1a1a2e;
+  border: 2px solid #0f3460; border-radius: 8px; cursor: text;
+  transition: border-color .2s;
+}
+.tag-wrap:focus-within { border-color: #e94560; }
+.tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 5px 10px; background: #0f3460; border-radius: 6px;
+  font-size: 13px; white-space: nowrap;
+}
+.tag .t-code { color: #3498db; }
+.tag .t-name { color: #ccc; margin-left: 2px; }
+.tag .t-rm {
+  cursor: pointer; color: #555; font-size: 14px; margin-left: 2px;
+  transition: color .15s; line-height: 1;
+}
+.tag .t-rm:hover { color: #e94560; }
+.tag-ipt {
+  flex: 1; min-width: 140px; border: none; outline: none;
+  background: transparent; color: #fff; font-size: 14px;
+}
+.tag-ipt::placeholder { color: #444; }
+
+/* Dropdown */
+.dd {
+  position: absolute; top: 100%; left: 0; right: 0;
+  margin-top: 4px; background: #16213e; border: 1px solid #0f3460;
+  border-radius: 8px; max-height: 260px; overflow-y: auto; z-index: 20;
+  display: none;
+}
+.dd.show { display: block; }
+.dd-item {
+  padding: 10px 16px; cursor: pointer; font-size: 13px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.dd-item:hover { background: #0f3460; }
+.dd-item .dc { color: #3498db; }
+.dd-item .dn { color: #aaa; font-size: 12px; margin-left: 6px; }
+
+/* Actions */
+.input-actions {
+  display: flex; gap: 10px; margin-top: 14px; align-items: center;
+}
+.btn-go {
+  padding: 10px 28px; background: #e94560; color: #fff; border: none;
+  border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+  transition: all .2s; white-space: nowrap; display: flex; align-items: center; gap: 8px;
+}
+.btn-go:hover:not(:disabled) { background: #c73850; }
+.btn-go:disabled { background: #2a2a3e; color: #555; cursor: not-allowed; }
+.btn-go .btn-spin {
+  width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.3);
+  border-top-color: #fff; border-radius: 50%; animation: spin .6s linear infinite;
+  display: none;
+}
+.btn-go.loading .btn-spin { display: inline-block; }
+.btn-go.loading .btn-text { display: none; }
+
+.btn-clr {
+  padding: 10px 20px; background: transparent; color: #888; border: 1px solid #2a2a3e;
+  border-radius: 8px; font-size: 14px; cursor: pointer; transition: all .2s;
+}
+.btn-clr:hover { border-color: #555; color: #ccc; }
+.hint { font-size: 12px; color: #555; margin-left: auto; }
+
+/* Loading overlay */
+.overlay {
+  display: none; position: fixed; inset: 0; z-index: 50;
+  background: rgba(26,26,46,.85); backdrop-filter: blur(4px);
+  flex-direction: column; align-items: center; justify-content: center;
+}
+.overlay.active { display: flex; }
+.ov-spin {
+  width: 40px; height: 40px; border: 3px solid #0f3460;
+  border-top-color: #e94560; border-radius: 50%;
+  animation: spin .7s linear infinite; margin-bottom: 16px;
+}
+.ov-text { font-size: 14px; color: #888; }
+.ov-sub { font-size: 12px; color: #555; margin-top: 6px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Results */
+.result-wrap { }
+.result-title {
+  font-size: 14px; color: #888; margin-bottom: 12px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.result-title strong { color: #e0e0e0; font-weight: 600; }
+
+/* Row */
+.row {
+  position: relative;
+  padding: 14px 14px 14px 18px;
+  border-bottom: 1px solid rgba(15,52,96,.4);
+  cursor: pointer; transition: background .15s;
+  background: #16213e; border-radius: 10px; margin-bottom: 8px;
+}
+.row:hover { background: #1a2744; }
+.row:last-child { border-bottom: none; margin-bottom: 0; }
+
+.row-bar {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 4px; border-radius: 0 2px 2px 0;
+}
+.bar-g { background: #e74c3c; box-shadow: 1px 0 8px rgba(231,76,60,.25); }
+.bar-y { background: #f39c12; box-shadow: 1px 0 8px rgba(243,156,18,.25); }
+.bar-r { background: #2ecc71; box-shadow: 1px 0 8px rgba(46,204,113,.25); }
+.bar-err { background: #888; box-shadow: none; }
+
+.row-main {
+  display: flex; align-items: center; gap: 14px;
+}
+
+.row-rank {
+  width: 24px; text-align: center; font-size: 14px; font-weight: 700;
+  color: #555; flex-shrink: 0;
+}
+.row-rank.r1 { color: #ffd700; }
+.row-rank.r2 { color: #c0c0c0; }
+.row-rank.r3 { color: #cd7f32; }
+
+.row-body { flex: 1; min-width: 0; }
+.row-name { font-size: 15px; font-weight: 600; }
+.row-name .code { color: #3498db; font-size: 12px; font-weight: 400; margin-left: 4px; }
+.row-sub { font-size: 12px; color: #666; margin-top: 2px; display: flex; gap: 10px; align-items: center; }
+
+.row-right { flex-shrink: 0; text-align: right; }
+.row-score { font-size: 28px; font-weight: 700; line-height: 1; }
+.row-action { font-size: 11px; margin-top: 4px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+.row-action.sc-h { background: rgba(231,76,60,.12); }
+.row-action.sc-m { background: rgba(243,156,18,.12); }
+.row-action.sc-l { background: rgba(46,204,113,.12); }
+
+.row-goto {
+  padding: 5px 12px; background: transparent; border: 1px solid #2a2a3e;
+  border-radius: 6px; color: #888; font-size: 12px; cursor: pointer;
+  transition: all .2s; white-space: nowrap;
+}
+.row-goto:hover { border-color: #e94560; color: #e94560; }
+
+/* Chips */
+.row-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; }
+.chip {
+  padding: 2px 7px; border-radius: 3px; font-size: 10px;
+  display: inline-flex; align-items: center; gap: 2px;
+  border: 1px solid transparent;
+}
+.chip.pos { background: rgba(231,76,60,.1); color: #e74c3c; border-color: rgba(231,76,60,.2); }
+.chip.neg { background: rgba(46,204,113,.1); color: #2ecc71; border-color: rgba(46,204,113,.2); }
+.chip.neu { background: rgba(255,255,255,.04); color: #666; border-color: rgba(255,255,255,.06); }
+.chip .cn { opacity: .7; }
+
+/* Expand */
+.row-expand { display: none; padding: 12px 0 2px; animation: fadeIn .15s; }
+.row-expand.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.dim-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.dim-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 8px; border-radius: 4px; font-size: 11px;
+  background: rgba(255,255,255,.02);
+}
+.dim-row .dn { color: #777; width: 56px; flex-shrink: 0; }
+.dim-row .db {
+  flex: 1; height: 3px; background: #0f3460; border-radius: 2px; overflow: hidden;
+}
+.dim-row .db > div { height: 100%; border-radius: 2px; transition: width .3s ease; }
+.dim-row .dv { font-weight: 700; min-width: 28px; text-align: right; font-size: 12px; }
+
+.expand-ft {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  margin-top: 10px; gap: 12px; flex-wrap: wrap;
+}
+.expand-info { flex: 1; font-size: 11px; color: #888; line-height: 1.6; min-width: 200px; }
+.expand-info .adv { font-size: 12px; font-weight: 600; margin-top: 4px; padding: 3px 8px; border-radius: 4px; display: inline-block; }
+.expand-info .adv.high { color: #e74c3c; background: rgba(231,76,60,.08); }
+.expand-info .adv.mid { color: #f39c12; background: rgba(243,156,18,.08); }
+.expand-info .adv.low { color: #2ecc71; background: rgba(46,204,113,.08); }
+
+/* Colors */
+.sc-h { color: #e74c3c; text-shadow: 0 0 12px rgba(231,76,60,.3); }
+.sc-m { color: #f39c12; text-shadow: 0 0 12px rgba(243,156,18,.3); }
+.sc-l { color: #2ecc71; text-shadow: 0 0 12px rgba(46,204,113,.3); }
+
+/* Empty */
+.empty {
+  text-align: center; padding: 80px 24px; color: #333;
+}
+.empty-icon { font-size: 42px; opacity: .35; margin-bottom: 12px; }
+.empty p { font-size: 13px; }
+
+/* Error */
+.row-err { opacity: .4; cursor: default; }
+.row-err:hover { background: none; border-radius: 0; }
+
+/* Responsive */
+@media (max-width: 640px) {
+  .container { padding: 16px; }
+  .dim-grid { grid-template-columns: 1fr; }
+  .row { gap: 10px; }
+  .row-score { font-size: 22px; }
+  .input-actions { flex-wrap: wrap; }
+  .hint { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <button class="back-btn" onclick="location.href='/'">&#8592;</button>
+  <span class="nav-title">股票推荐排序</span>
+</div>
+
+<div class="container">
+  <!-- Input -->
+  <div class="input-card">
+    <div class="input-label">添加需要对比的股票</div>
+    <div style="position:relative;">
+      <div class="tag-wrap" id="tagWrap" onclick="document.getElementById('tagIpt').focus()">
+        <input class="tag-ipt" id="tagIpt" type="text" placeholder="输入股票代码或名称搜索，回车添加..." autocomplete="off">
+      </div>
+      <div class="dd" id="dd"></div>
+    </div>
+    <div class="input-actions">
+      <button class="btn-go" id="btnGo" onclick="doAnalyze()" disabled>
+        <span class="btn-spin"></span>
+        <span class="btn-text">开始分析</span>
+      </button>
+      <button class="btn-clr" onclick="clearAll()">清空</button>
+      <span class="hint">已选 <strong id="cntHint">0</strong> 只</span>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="result-wrap" id="resultWrap" style="display:none;">
+    <div class="result-title"><span id="resultTitle"></span></div>
+    <div id="resultList"></div>
+  </div>
+
+  <!-- Empty -->
+  <div class="empty" id="emptyState">
+    <div class="empty-icon">&#128200;</div>
+    <p>添加股票后点击「开始分析」查看推荐排序</p>
+  </div>
+</div>
+
+<!-- Overlay -->
+<div class="overlay" id="overlay">
+  <div class="ov-spin"></div>
+  <div class="ov-text" id="ovText">正在分析评分...</div>
+  <div class="ov-sub" id="ovSub"></div>
+</div>
+
+<script>
+// State
+let selected = [];
+let loading = false;
+let searchTimer;
+const tagIpt = document.getElementById('tagIpt');
+const tagWrap = document.getElementById('tagWrap');
+const dd = document.getElementById('dd');
+const btnGo = document.getElementById('btnGo');
+
+// Search
+tagIpt.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const q = tagIpt.value.trim();
+  if (!q) { dd.classList.remove('show'); return; }
+  searchTimer = setTimeout(() => doSearch(q), 200);
+});
+
+tagIpt.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const q = tagIpt.value.trim();
+    if (q) doSearch(q, true);
+  }
+  if (e.key === 'Backspace' && !tagIpt.value && selected.length) {
+    removeTag(selected[selected.length - 1].code);
+  }
+  if (e.key === 'Escape') dd.classList.remove('show');
+});
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.tag-wrap') && !e.target.closest('.dd')) dd.classList.remove('show');
+});
+
+async function doSearch(q, autoAdd = false) {
+  const resp = await fetch(`/api/stocks?q=${encodeURIComponent(q)}&page=1&size=10`);
+  const data = (await resp.json()).data || [];
+  if (autoAdd && data.length === 1) {
+    addTag(data[0].code, data[0].name || '');
+    tagIpt.value = '';
+    dd.classList.remove('show');
+    return;
+  }
+  if (!data.length) {
+    dd.innerHTML = '<div class="dd-item" style="color:#444;pointer-events:none">无匹配结果</div>';
+    dd.classList.add('show');
+    return;
+  }
+  dd.innerHTML = data.map(s => {
+    const c = s.pct_change >= 0 ? 'color:#e74c3c' : 'color:#2ecc71';
+    const sg = s.pct_change >= 0 ? '+' : '';
+    return `<div class="dd-item" data-c="${s.code}" data-n="${s.name||''}" onclick="pick(this)">
+      <span><span class="dc">${s.code}</span><span class="dn">${s.name||''}</span></span>
+      <span style="${c}">${sg}${s.pct_change.toFixed(2)}%</span>
+    </div>`;
+  }).join('');
+  dd.classList.add('show');
+}
+
+function pick(el) {
+  addTag(el.dataset.c, el.dataset.n);
+  tagIpt.value = '';
+  dd.classList.remove('show');
+}
+
+// Tags
+function addTag(code, name) {
+  if (selected.find(s => s.code === code)) return;
+  selected.push({ code, name });
+  renderTags();
+}
+
+function removeTag(code) {
+  selected = selected.filter(s => s.code !== code);
+  renderTags();
+}
+
+function renderTags() {
+  tagWrap.querySelectorAll('.tag').forEach(t => t.remove());
+  selected.forEach(s => {
+    const t = document.createElement('span');
+    t.className = 'tag';
+    t.innerHTML = `<span class="t-code">${s.code}</span>${s.name ? `<span class="t-name">${s.name}</span>` : ''}<span class="t-rm" onclick="removeTag('${s.code}')">&times;</span>`;
+    tagWrap.insertBefore(t, tagIpt);
+  });
+  document.getElementById('cntHint').textContent = selected.length;
+  btnGo.disabled = selected.length === 0;
+}
+
+function clearAll() {
+  selected = [];
+  renderTags();
+  document.getElementById('resultWrap').style.display = 'none';
+  document.getElementById('emptyState').style.display = '';
+}
+
+// Analyze
+async function doAnalyze() {
+  if (loading || !selected.length) return;
+  loading = true;
+
+  const ov = document.getElementById('overlay');
+  document.getElementById('ovText').textContent = '正在分析评分...';
+  document.getElementById('ovSub').textContent = selected.length + ' 只股票';
+  ov.classList.add('active');
+  btnGo.classList.add('loading');
+  btnGo.disabled = true;
+
+  try {
+    const resp = await fetch('/api/batch-score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(selected.map(s => s.code)),
+    });
+    const results = await resp.json();
+    renderResults(results);
+  } catch (err) {
+    alert('分析失败: ' + err.message);
+  } finally {
+    ov.classList.remove('active');
+    btnGo.classList.remove('loading');
+    btnGo.disabled = selected.length === 0;
+    loading = false;
+  }
+}
+
+// Render
+function sCls(v) { return v >= 63 ? 'sc-h' : v >= 40 ? 'sc-m' : 'sc-l'; }
+function bCls(v) { return v >= 63 ? 'bar-g' : v >= 40 ? 'bar-y' : 'bar-r'; }
+function aCls(v) { return v >= 63 ? 'high' : v >= 40 ? 'mid' : 'low'; }
+
+function renderResults(results) {
+  const valid = results.filter(r => !r.error);
+  const errors = results.filter(r => r.error);
+
+  document.getElementById('emptyState').style.display = 'none';
+  const wrap = document.getElementById('resultWrap');
+  wrap.style.display = '';
+  document.getElementById('resultTitle').innerHTML =
+    `<strong>分析结果</strong> 共 ${results.length} 只${errors.length ? `，${errors.length} 只无数据` : ''}`;
+
+  let h = '';
+
+  errors.forEach(r => {
+    h += `<div class="row row-err">
+      <div class="row-bar bar-err"></div>
+      <div class="row-main">
+        <div class="row-rank">-</div>
+        <div class="row-body">
+          <div class="row-name">${r.code} <span style="color:#e74c3c;font-size:11px;font-weight:400;">${r.error}</span></div>
+        </div>
+      </div>
+    </div>`;
+  });
+
+  valid.forEach((r, i) => {
+    const rank = i + 1;
+    const rc = rank <= 3 ? ` r${rank}` : '';
+    const pc = r.pct_change >= 0 ? 'color:#e74c3c' : 'color:#2ecc71';
+    const ps = r.pct_change >= 0 ? '+' : '';
+    const sc = sCls(r.total);
+
+    const top4 = [...(r.dimensions || [])].sort((a, b) => Math.abs(b.score) - Math.abs(a.score)).slice(0, 4);
+    const chips = top4.map(d => {
+      const cc = d.score > 0 ? 'pos' : d.score < 0 ? 'neg' : 'neu';
+      return `<span class="chip ${cc}"><span class="cn">${d.name}</span>${d.score > 0 ? '+' : ''}${d.score}</span>`;
+    }).join('');
+
+    const dims = (r.dimensions || []).map(d => {
+      const p = Math.min(Math.abs(d.score) / 10 * 100, 100);
+      let bc;
+      if (d.score >= 5) bc = '#e74c3c';
+      else if (d.score > 0) bc = '#ec7063';
+      else if (d.score === 0) bc = '#555';
+      else if (d.score > -5) bc = '#58d68d';
+      else bc = '#2ecc71';
+      const vc = d.score > 0 ? 'sc-h' : d.score < 0 ? 'sc-l' : '';
+      return `<div class="dim-row">
+        <span class="dn">${d.name}</span>
+        <div class="db"><div style="width:${p}%;background:${bc}"></div></div>
+        <span class="dv ${vc}">${d.score > 0 ? '+' : ''}${d.score}</span>
+      </div>`;
+    }).join('');
+
+    h += `<div class="row" onclick="toggleExp('${r.code}')">
+      <div class="row-bar ${bCls(r.total)}"></div>
+      <div class="row-main">
+        <div class="row-rank${rc}">${rank}</div>
+        <div class="row-body">
+          <div class="row-name">${r.name || r.code}<span class="code">${r.code}</span></div>
+          <div class="row-sub">
+            <span style="color:#999">现价 ${r.close}</span>
+            <span style="${pc};font-weight:600">${ps}${r.pct_change.toFixed(2)}%</span>
+          </div>
+          <div class="row-chips">${chips}</div>
+        </div>
+        <div class="row-right">
+          <div class="row-score ${sc}">${r.total}</div>
+          <div class="row-action ${sc}">${r.action || ''}</div>
+        </div>
+      </div>
+      <div class="row-expand" id="exp-${r.code}">
+        <div class="dim-grid">${dims}</div>
+        <div class="expand-ft">
+          <div class="expand-info">
+            ${r.summary || ''}
+            ${r.hold_advice ? `<div class="adv ${aCls(r.total)}">${r.hold_advice}</div>` : ''}
+          </div>
+          <button class="row-goto" onclick="event.stopPropagation();window.open('/stock/${r.code}','_blank')">查看K线 &#8599;</button>
+        </div>
+      </div>
+    </div>`;
+  });
+
+  document.getElementById('resultList').innerHTML = h;
+}
+
+function toggleExp(code) {
+  const el = document.getElementById('exp-' + code);
+  if (el) el.classList.toggle('active');
+}
+</script>
+</body>
+</html>

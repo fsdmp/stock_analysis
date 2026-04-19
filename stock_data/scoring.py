@@ -64,21 +64,35 @@ def _detect_trend(df, n):
 
     sc = 0
 
-    # 1. 3-day cumulative momentum (most weight)
+    # 1. 3-day cumulative momentum (one factor, not dominant)
     if n >= 4 and close[n - 4] > 0:
         cum3 = (close[n - 1] / close[n - 4] - 1) * 100
         if cum3 > 6:
-            sc += 3
+            sc += 1.5
         elif cum3 > 3:
-            sc += 2
-        elif cum3 > 0:
             sc += 1
+        elif cum3 > 0:
+            sc += 0.5
         elif cum3 < -6:
-            sc -= 3
+            sc -= 1.5
         elif cum3 < -3:
-            sc -= 2
-        elif cum3 < 0:
             sc -= 1
+        elif cum3 < 0:
+            sc -= 0.5
+
+    # 6. Price position vs 10-day low (how far extended from support)
+    if n >= 11:
+        low10 = min(close[n - 11:n])
+        if low10 > 0:
+            dist_from_low = (close[n - 1] - low10) / low10 * 100
+            if dist_from_low > 12:
+                sc += 1
+            elif dist_from_low > 6:
+                sc += 0.5
+            elif dist_from_low < -5:
+                sc -= 1
+            elif dist_from_low < 0:
+                sc -= 0.5
 
     # 2. Price vs MA5
     if _v(ma5) and ma5 > 0:
@@ -843,55 +857,121 @@ def _score_momentum(df, n, trend):
                 break
         else:
             break
-    if streak >= 3:
-        score += 3 if trend >= 1 else 1
-        details.append(f"连阳{streak}日" + ("(趋势配合)" if trend >= 1 else ""))
+    if streak >= 5:
+        score -= 1 if trend >= 1 else 0
+        details.append(f"连阳{streak}日(连涨过多)")
+    elif streak >= 3:
+        score += 0 if trend >= 1 else 0
+        details.append(f"连阳{streak}日(偏高)")
+    elif streak == 2:
+        score += 2 if trend >= 1 else 1
+        details.append("连阳2日(趋势确立中)")
+    elif streak == 1:
+        score += 1
+        details.append("首日上涨(启动)")
+    if streak <= -5:
+        score += 0 if trend <= -1 else 1
+        details.append(f"连阴{abs(streak)}日(超跌)")
     elif streak <= -3:
         score -= 3 if trend <= -1 else 1
         details.append(f"连阴{abs(streak)}日" + ("(趋势配合)" if trend <= -1 else ""))
 
-    # 3-day cumulative
+    # 3-day cumulative (trend-contextualized: penalize chasing, reward pullbacks)
     if n >= 4 and close[n - 4] > 0:
         c3 = (close[n - 1] / close[n - 4] - 1) * 100
-        if c3 > 10:
-            if trend >= 1:
+        if trend >= 1:  # Uptrend: prefer mild/pullback entries
+            if c3 > 10:
+                score -= 1
+                details.append(f"3日涨{c3:+.1f}%(追高风险)")
+            elif c3 > 7:
+                score += 0
+                details.append(f"3日涨{c3:+.1f}%(偏高)")
+            elif c3 > 3:
+                score += 1
+                details.append(f"3日涨{c3:+.1f}%(健康动量)")
+            elif c3 > 0:
                 score += 2
-                details.append(f"3日涨{c3:+.1f}%(强势)")
+                details.append(f"3日涨{c3:+.1f}%(温和启动)")
+            elif c3 > -3:
+                score += 2
+                details.append(f"3日微调{c3:+.1f}%(回调买入)")
+            elif c3 > -5:
+                score += 3
+                details.append(f"3日回调{c3:+.1f}%(买点)")
             else:
+                score += 1
+                details.append(f"3日深调{c3:+.1f}%(趋势待确认)")
+        elif trend <= -1:  # Downtrend: defensive logic
+            if c3 > 10:
                 score -= 3
                 details.append(f"3日涨幅{c3:+.1f}%过热")
-        elif c3 > 5:
-            score += 3 if trend >= 1 else 1
-            details.append(f"3日涨{c3:+.1f}%")
-        elif c3 > 0:
-            score += 1
-        elif c3 < -10:
-            if trend <= -1:
+            elif c3 > 5:
+                score += 1
+                details.append(f"3日反弹{c3:+.1f}%")
+            elif c3 > 0:
+                score += 1
+            elif c3 < -10:
                 score -= 2
                 details.append(f"3日跌{c3:+.1f}%(弱势)")
-            else:
-                score += 2
-                details.append(f"3日跌幅{c3:+.1f}%(超跌反弹)")
-        elif c3 < -5:
-            if trend >= 1:
-                score += 2
-                details.append(f"3日回调{c3:+.1f}%(买点)")
-            elif trend <= -1:
+            elif c3 < -5:
                 score -= 2
                 details.append(f"3日跌{c3:+.1f}%")
             else:
+                if c3 < 0:
+                    score -= 1
+        else:  # Sideways
+            if c3 > 7:
+                score += 0
+                details.append(f"3日涨{c3:+.1f}%(突破待确认)")
+            elif c3 > 3:
                 score += 1
-        else:
-            if c3 < 0:
+                details.append(f"3日涨{c3:+.1f}%")
+            elif c3 > 0:
+                score += 1
+            elif c3 > -5:
                 score -= 1
+            else:
+                score += 1
+                details.append(f"3日跌{c3:+.1f}%(区间超跌)")
 
-    # 5-day cumulative
+    # Distance from 10-day low (position safety)
+    if n >= 11:
+        low10 = min(close[n - 11:n])
+        if low10 > 0:
+            dist_from_low = (cp - low10) / low10 * 100
+            if trend >= 1:  # uptrend
+                if dist_from_low < 3:
+                    score += 2
+                    details.append("贴近10日低点(安全边际高)")
+                elif dist_from_low < 7:
+                    score += 1
+                elif dist_from_low > 15:
+                    score -= 2
+                    details.append(f"远离10日低点{dist_from_low:.0f}%(追高风险)")
+                elif dist_from_low > 10:
+                    score -= 1
+                    details.append("偏离10日低点较远")
+
+    # Today's initiative (first-day move vs continuation)
+    if n >= 3:
+        yesterday_pct = float(pct[n - 2]) if n >= 2 else 0
+        if tp > 2 and yesterday_pct <= 0:
+            score += 2
+            details.append("启动日(首日上攻)")
+        elif tp > 2 and yesterday_pct > 3:
+            score -= 1
+            details.append("连续加速(获利盘压力)")
+
+    # 5-day cumulative (penalize overextension even in uptrend)
     if n >= 6 and close[n - 6] > 0:
         c5 = (close[n - 1] / close[n - 6] - 1) * 100
-        if c5 > 15 and trend < 1:
-            score -= 3
-            details.append(f"5日涨幅{c5:+.1f}%异常")
-        elif c5 < -15:
+        if c5 > 15:
+            score -= 2
+            details.append(f"5日涨幅{c5:+.1f}%(偏高超买)")
+        elif c5 > 10 and trend >= 1:
+            score -= 1
+            details.append(f"5日涨{c5:+.1f}%(偏高)")
+        if c5 < -15:
             if trend >= 1:
                 score += 3
                 details.append(f"5日深调{c5:+.1f}%(抄底)")
