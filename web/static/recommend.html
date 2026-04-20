@@ -123,6 +123,27 @@ body {
 .ov-found { font-size: 13px; color: #e94560; margin-top: 8px; font-weight: 600; display: none; }
 .ov-found.active { display: block; }
 
+/* Live stock list in overlay */
+.ov-list {
+  width: 420px; max-width: 92vw; max-height: 280px;
+  margin-top: 16px; overflow-y: auto; border-radius: 8px;
+  background: rgba(22,33,62,.6); border: 1px solid #0f3460;
+}
+.ov-list::-webkit-scrollbar { width: 4px; }
+.ov-list::-webkit-scrollbar-thumb { background: #0f3460; border-radius: 2px; }
+.ov-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px; border-bottom: 1px solid rgba(15,52,96,.4);
+  animation: ovFadeIn .25s ease;
+}
+.ov-item:last-child { border-bottom: none; }
+.ov-item .oi-name { font-size: 13px; color: #e0e0e0; font-weight: 500; }
+.ov-item .oi-name .oi-code { color: #3498db; font-size: 11px; font-weight: 400; margin-left: 4px; }
+.ov-item .oi-right { display: flex; align-items: center; gap: 10px; }
+.ov-item .oi-price { font-size: 11px; color: #888; }
+.ov-item .oi-score { font-size: 18px; font-weight: 700; min-width: 32px; text-align: right; }
+@keyframes ovFadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
 /* Scan card */
 .scan-divider { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
 .scan-divider .line { flex: 1; height: 1px; background: #0f3460; }
@@ -296,6 +317,13 @@ body {
           style="width:70px; padding:7px 10px; background:#1a1a2e; border:1px solid #0f3460;
           border-radius:6px; color:#e0e0e0; font-size:14px; text-align:center; outline:none;">
       </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:13px; color:#888;">最高价格</span>
+        <input type="number" id="maxPrice" value="100" min="0" step="10"
+          style="width:80px; padding:7px 10px; background:#1a1a2e; border:1px solid #0f3460;
+          border-radius:6px; color:#e0e0e0; font-size:14px; text-align:center; outline:none;">
+        <span style="font-size:11px; color:#555;">元</span>
+      </div>
       <button class="btn-go" id="btnScan" onclick="doFullScan()">
         <span class="btn-spin"></span>
         <span class="btn-text">开始扫描</span>
@@ -324,6 +352,7 @@ body {
   <div class="ov-sub" id="ovSub"></div>
   <div class="ov-prog" id="ovProg" style="display:none"><div id="ovProgBar" style="width:0%"></div></div>
   <div class="ov-found" id="ovFound"></div>
+  <div class="ov-list" id="ovList"></div>
 </div>
 
 <script>
@@ -553,6 +582,7 @@ let scanTimer = null;
 
 async function doFullScan() {
   const minScore = parseInt(document.getElementById('minScore').value) || 95;
+  const maxPrice = parseFloat(document.getElementById('maxPrice').value) || 100;
   const btn = document.getElementById('btnScan');
   btn.classList.add('loading');
   btn.disabled = true;
@@ -572,7 +602,7 @@ async function doFullScan() {
     const resp = await fetch('/api/full-scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ min_score: minScore }),
+      body: JSON.stringify({ min_score: minScore, max_price: maxPrice }),
     });
     await resp.json();
     scanTimer = setInterval(pollScanStatus, 800);
@@ -597,12 +627,34 @@ async function pollScanStatus() {
       f.textContent = `已发现 ${d.found} 只高分股票`;
       f.classList.add('active');
     }
+    // Render live stock list
+    const listEl = document.getElementById('ovList');
+    if (d.results && d.results.length > 0) {
+      const sorted = [...d.results].sort((a, b) => (b.total || 0) - (a.total || 0));
+      const prevLen = listEl.children.length;
+      if (sorted.length !== prevLen) {
+        listEl.innerHTML = sorted.map(r => {
+          const sc = sCls(r.total || 0);
+          const pc = (r.pct_change || 0) >= 0 ? 'color:#e74c3c' : 'color:#2ecc71';
+          const ps = (r.pct_change || 0) >= 0 ? '+' : '';
+          return `<div class="ov-item">
+            <div class="oi-name">${r.name || r.code}<span class="oi-code">${r.code}</span></div>
+            <div class="oi-right">
+              <span class="oi-price" style="${pc}">${r.close || ''}${r.pct_change != null ? ' ' + ps + r.pct_change.toFixed(2) + '%' : ''}</span>
+              <span class="oi-score ${sc}">${r.total || 0}</span>
+            </div>
+          </div>`;
+        }).join('');
+        listEl.scrollTop = listEl.scrollHeight;
+      }
+    }
     if (!d.running && d.done) {
       clearInterval(scanTimer);
       scanTimer = null;
       document.getElementById('overlay').classList.remove('active');
       document.getElementById('ovProg').style.display = 'none';
       document.getElementById('ovFound').classList.remove('active');
+      listEl.innerHTML = '';
       document.getElementById('btnScan').classList.remove('loading');
       document.getElementById('btnScan').disabled = false;
       document.getElementById('scanHint').textContent = `扫描完成，发现 ${d.results.length} 只`;

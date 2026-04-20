@@ -38,11 +38,49 @@ def _v(val) -> bool:
     return val is not None and np.isfinite(val)
 
 
-def _safe(df, idx, col):
-    if idx < 0 or idx >= len(df):
+def _extract_cols(df: pd.DataFrame) -> dict:
+    """Pre-extract all columns needed by scorers as numpy arrays.
+
+    Returns dict mapping col_name -> numpy array (NaN-safe).
+    This avoids repeated df.iloc[idx].get(col) which creates a Series each call.
+    """
+    needed = [
+        "date",
+        "close", "open", "high", "low", "volume", "pct_change", "turnover",
+        "ma5", "ma7", "ma10", "ma20",
+        "vwma5", "vwma10", "vwma20",
+        "bb_upper", "bb_middle", "bb_lower", "bb_bandwidth",
+        "macd_dif", "macd_dea", "macd_hist",
+        "kdj_k", "kdj_d", "kdj_j",
+    ]
+    cols = {}
+    for c in needed:
+        if c in df.columns:
+            if c == "date":
+                cols[c] = df[c].to_numpy()
+            else:
+                cols[c] = df[c].to_numpy(dtype=np.float64)
+        # Missing columns simply won't be in the dict
+    return cols
+
+
+def _safe(cols, idx, col):
+    """Fast safe accessor using pre-extracted numpy arrays.
+
+    Args:
+        cols: dict from _extract_cols(), mapping col_name -> numpy array
+        idx: row index
+        col: column name
+    Returns:
+        Value if valid (not NaN), else None
+    """
+    arr = cols.get(col)
+    if arr is None or idx < 0 or idx >= len(arr):
         return None
-    val = df.iloc[idx].get(col)
-    return val if _v(val) else None
+    val = arr[idx]
+    if np.isnan(val):
+        return None
+    return val
 
 
 def _clamp(x, lo=-10, hi=10):
@@ -53,15 +91,15 @@ def _clamp(x, lo=-10, hi=10):
 # Trend Detection  (short-term, 3-10 day window)
 # ---------------------------------------------------------------------------
 
-def _detect_trend(df, n):
+def _detect_trend(cols, n):
     """Detect short-term trend for indicator contextualization.
 
     Returns: +2 strong up, +1 up, 0 sideways, -1 down, -2 strong down
     """
-    close = df["close"].values
-    vol = df["volume"].fillna(0).values.astype(np.float64)
-    ma5 = _safe(df, n - 1, "ma5")
-    ma10 = _safe(df, n - 1, "ma10")
+    close = cols["close"]
+    vol = cols["volume"]
+    ma5 = _safe(cols, n - 1, "ma5")
+    ma10 = _safe(cols, n - 1, "ma10")
 
     sc = 0
 
@@ -116,7 +154,7 @@ def _detect_trend(df, n):
 
     # 4. MA5 slope (3-day)
     if n >= 4:
-        ma5_3d = _safe(df, n - 4, "ma5")
+        ma5_3d = _safe(cols, n - 4, "ma5")
         if _v(ma5_3d) and ma5_3d > 0 and _v(ma5):
             slope = (ma5 - ma5_3d) / ma5_3d * 100
             if slope > 1.5:
@@ -150,7 +188,7 @@ def _detect_trend(df, n):
 # MA break quality & close confirmation (used by _score_ma_trend)
 # ---------------------------------------------------------------------------
 
-def _eval_ma_break_quality(df, n):
+def _eval_ma_break_quality(cols, n):
     """评估最近MA突破的质量.
 
     返回 -5 ~ +5 的质量分:
@@ -160,18 +198,23 @@ def _eval_ma_break_quality(df, n):
     if n < 5:
         return 0
 
-    cp = df["close"].values[n - 1]
-    op = df["open"].values[n - 1]
-    hi = df["high"].values[n - 1]
-    lo = df["low"].values[n - 1]
-    vol = df["volume"].fillna(0).values.astype(np.float64)
+    close = cols["close"]
+    open_ = cols["open"]
+    high = cols["high"]
+    low = cols["low"]
+    vol = cols["volume"]
 
-    ma5 = _safe(df, n - 1, "ma5")
-    ma5_prev = _safe(df, n - 2, "ma5")
+    cp = close[n - 1]
+    op = open_[n - 1]
+    hi = high[n - 1]
+    lo = low[n - 1]
+
+    ma5 = _safe(cols, n - 1, "ma5")
+    ma5_prev = _safe(cols, n - 2, "ma5")
     if not _v(ma5) or not _v(ma5_prev):
         return 0
 
-    prev_close = df["close"].values[n - 2]
+    prev_close = close[n - 2]
     broke_up = prev_close <= ma5_prev and cp > ma5
     broke_down = prev_close >= ma5_prev and cp < ma5
 
@@ -215,7 +258,7 @@ def _eval_ma_break_quality(df, n):
     return _clamp(direction * quality, -5, 5)
 
 
-def _check_ma_close_confirmation(df, n):
+def _check_ma_close_confirmation(cols, n):
     """检查连续收盘站稳MA5的确认机制.
 
     返回正数=连续站稳上方天数, 负数=连续收于下方天数, 0=刚穿越或不满足.
@@ -223,10 +266,11 @@ def _check_ma_close_confirmation(df, n):
     if n < 3:
         return 0
 
+    close = cols["close"]
     ma5_col, close_col = [], []
     for i in range(max(0, n - 5), n):
-        m = _safe(df, i, "ma5")
-        c = df["close"].values[i]
+        m = _safe(cols, i, "ma5")
+        c = close[i]
         if not _v(m):
             return 0
         ma5_col.append(m)
@@ -251,7 +295,7 @@ def _check_ma_close_confirmation(df, n):
 # All receive `trend` parameter for contextual interpretation
 # ---------------------------------------------------------------------------
 
-def _score_ma_trend(df, n, trend):
+def _score_ma_trend(cols, n, trend):
     """MA排列 + VWMA对抗诱多诱空 + 突破质量 + BB上下文.
 
     Trend context:
@@ -259,20 +303,21 @@ def _score_ma_trend(df, n, trend):
     - Downtrend: MA bounce signals capped, positive scores limited
     """
     score, details = 0, []
-    cp = df["close"].values[n - 1]
-    ma5 = _safe(df, n - 1, "ma5")
-    ma10 = _safe(df, n - 1, "ma10")
-    ma20 = _safe(df, n - 1, "ma20")
+    close = cols["close"]
+    cp = close[n - 1]
+    ma5 = _safe(cols, n - 1, "ma5")
+    ma10 = _safe(cols, n - 1, "ma10")
+    ma20 = _safe(cols, n - 1, "ma20")
 
     if not all(_v(x) for x in [ma5, ma10, ma20]):
         return 0, "均线数据不足"
 
-    vwma5 = _safe(df, n - 1, "vwma5")
-    vwma10 = _safe(df, n - 1, "vwma10")
-    vwma20 = _safe(df, n - 1, "vwma20")
-    bb_bw = _safe(df, n - 1, "bb_bandwidth")
-    bb_upper = _safe(df, n - 1, "bb_upper")
-    bb_lower = _safe(df, n - 1, "bb_lower")
+    vwma5 = _safe(cols, n - 1, "vwma5")
+    vwma10 = _safe(cols, n - 1, "vwma10")
+    vwma20 = _safe(cols, n - 1, "vwma20")
+    bb_bw = _safe(cols, n - 1, "bb_bandwidth")
+    bb_upper = _safe(cols, n - 1, "bb_upper")
+    bb_lower = _safe(cols, n - 1, "bb_lower")
 
     # 1. MA alignment
     if ma5 > ma10 > ma20:
@@ -312,7 +357,7 @@ def _score_ma_trend(df, n, trend):
             details.append("疑似诱空(缩量跌破MA)")
 
     # 3. Break quality
-    break_score = _eval_ma_break_quality(df, n)
+    break_score = _eval_ma_break_quality(cols, n)
     if break_score != 0:
         score += break_score
         details.append(f"突破质量{'+' if break_score > 0 else ''}{break_score}")
@@ -335,7 +380,7 @@ def _score_ma_trend(df, n, trend):
                 details.append(f"BB下轨({bb_pos:.0f}%)")
 
     # 5. Close confirmation
-    confirm = _check_ma_close_confirmation(df, n)
+    confirm = _check_ma_close_confirmation(cols, n)
     if confirm > 0:
         score += 2
         details.append(f"连续{confirm}日站稳MA5上方")
@@ -354,17 +399,17 @@ def _score_ma_trend(df, n, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_macd(df, n, trend):
+def _score_macd(cols, n, trend):
     """MACD动能 with trend context.
 
     - Uptrend + MACD turning up from below zero = strong reversal
     - Downtrend + MACD turning down from above zero = danger
     """
     score, details = 0, []
-    dif = _safe(df, n - 1, "macd_dif")
-    dea = _safe(df, n - 1, "macd_dea")
-    hist = _safe(df, n - 1, "macd_hist")
-    prev_hist = _safe(df, n - 2, "macd_hist") if n >= 2 else None
+    dif = _safe(cols, n - 1, "macd_dif")
+    dea = _safe(cols, n - 1, "macd_dea")
+    hist = _safe(cols, n - 1, "macd_hist")
+    prev_hist = _safe(cols, n - 2, "macd_hist") if n >= 2 else None
 
     if not all(_v(x) for x in [dif, dea, hist]):
         return 0, "MACD数据不足"
@@ -422,7 +467,7 @@ def _score_macd(df, n, trend):
 
     # Consecutive bars
     if n >= 5:
-        hists = [_safe(df, n - 1 - i, "macd_hist") for i in range(5)]
+        hists = [_safe(cols, n - 1 - i, "macd_hist") for i in range(5)]
         if all(_v(h) and h > 0 for h in hists):
             score += 1
             details.append("连续红柱")
@@ -433,18 +478,18 @@ def _score_macd(df, n, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_kdj(df, n, trend):
+def _score_kdj(cols, n, trend):
     """KDJ with trend-contextualized interpretation.
 
     KEY: KDJ超买 in uptrend = STRONG momentum (positive!)
          KDJ超卖 in downtrend = STILL weak (negative/neutral!)
     """
     score, details = 0, []
-    k = _safe(df, n - 1, "kdj_k")
-    d = _safe(df, n - 1, "kdj_d")
-    j = _safe(df, n - 1, "kdj_j")
-    pk = _safe(df, n - 2, "kdj_k") if n >= 2 else None
-    pd = _safe(df, n - 2, "kdj_d") if n >= 2 else None
+    k = _safe(cols, n - 1, "kdj_k")
+    d = _safe(cols, n - 1, "kdj_d")
+    j = _safe(cols, n - 1, "kdj_j")
+    pk = _safe(cols, n - 2, "kdj_k") if n >= 2 else None
+    pd = _safe(cols, n - 2, "kdj_d") if n >= 2 else None
 
     if not all(_v(x) for x in [k, d, j]):
         return 0, "KDJ数据不足"
@@ -458,10 +503,10 @@ def _score_kdj(df, n, trend):
             # Stagnation check - even in uptrend, extended OB is risky
             if n >= 5:
                 ob = sum(1 for i in range(5)
-                         if _v(_safe(df, n - 1 - i, "kdj_k"))
-                         and _safe(df, n - 1 - i, "kdj_k") > 80
-                         and _v(_safe(df, n - 1 - i, "kdj_d"))
-                         and _safe(df, n - 1 - i, "kdj_d") > 70)
+                         if _v(_safe(cols, n - 1 - i, "kdj_k"))
+                         and _safe(cols, n - 1 - i, "kdj_k") > 80
+                         and _v(_safe(cols, n - 1 - i, "kdj_d"))
+                         and _safe(cols, n - 1 - i, "kdj_d") > 70)
                 if ob >= 5:
                     score -= 2
                     details.append("高位钝化(注意风险)")
@@ -531,15 +576,15 @@ def _score_kdj(df, n, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_volume(df, n, trend):
+def _score_volume(cols, n, trend):
     """量价配合 with trend context.
 
     - Uptrend + shrinking volume + price up = controlled rise (bullish)
     - Downtrend + heavy volume + small gain = distribution (bearish)
     """
     score, details = 0, []
-    vol = df["volume"].fillna(0).values.astype(np.float64)
-    close = df["close"].values
+    vol = cols["volume"]
+    close = cols["close"]
     v = vol[n - 1]
 
     if v <= 0:
@@ -549,7 +594,7 @@ def _score_volume(df, n, trend):
     if va5 <= 0:
         va5 = v
     ratio5 = v / va5
-    pct = _safe(df, n - 1, "pct_change")
+    pct = _safe(cols, n - 1, "pct_change")
     pv = float(pct) if _v(pct) else 0
 
     # Volume ratio scoring
@@ -632,7 +677,7 @@ def _score_volume(df, n, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_sr(df, n, zones, trend):
+def _score_sr(cols, n, zones, trend):
     """支撑压力 with trend context.
 
     - Uptrend near support = strong buy signal
@@ -640,7 +685,7 @@ def _score_sr(df, n, zones, trend):
     - Uptrend no resistance = clear sky
     """
     score, details = 0, []
-    cp = df["close"].values[n - 1]
+    cp = cols["close"][n - 1]
 
     if not zones:
         return 0, "无有效支撑压力"
@@ -664,7 +709,7 @@ def _score_sr(df, n, zones, trend):
         if dist >= 0 and dist < res_dist:
             res_dist, nearest_res = dist, z
 
-    atr = _calc_atr(df, n, 14)
+    atr = _calc_atr(cols, n, 14)
     if atr <= 0:
         atr = cp * 0.02
 
@@ -707,13 +752,13 @@ def _score_sr(df, n, zones, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_squeeze(df, n, trend):
+def _score_squeeze(cols, n, trend):
     """均线粘合 + trend-biased direction."""
     score, details = 0, []
-    ma5 = _safe(df, n - 1, "ma5")
-    ma10 = _safe(df, n - 1, "ma10")
-    ma20 = _safe(df, n - 1, "ma20")
-    cp = df["close"].values[n - 1]
+    ma5 = _safe(cols, n - 1, "ma5")
+    ma10 = _safe(cols, n - 1, "ma10")
+    ma20 = _safe(cols, n - 1, "ma20")
+    cp = cols["close"][n - 1]
 
     if not all(_v(x) for x in [ma5, ma10, ma20]):
         return 0, "数据不足"
@@ -746,7 +791,7 @@ def _score_squeeze(df, n, trend):
             score -= 3
             details.append("下跌趋势粘合(偏空)")
         else:
-            hist = _safe(df, n - 1, "macd_hist")
+            hist = _safe(cols, n - 1, "macd_hist")
             if _v(hist):
                 if hist > 0.02:
                     score += 2
@@ -765,7 +810,7 @@ def _score_squeeze(df, n, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_momentum(df, n, trend):
+def _score_momentum(cols, n, trend):
     """短期动量 (CORE dimension for short-term).
 
     Trend context:
@@ -774,8 +819,8 @@ def _score_momentum(df, n, trend):
     - Strong momentum aligned with trend = AMPLIFIED
     """
     score, details = 0, []
-    close = df["close"].values
-    pct = df["pct_change"].fillna(0).values if "pct_change" in df.columns else np.zeros(n)
+    close = cols["close"]
+    pct = cols["pct_change"]
     cp = close[n - 1]
 
     # === Today's change (most important) ===
@@ -1009,18 +1054,18 @@ def _score_momentum(df, n, trend):
                 details.append(f"5日深调{c5:+.1f}%(抄底)")
 
     # Amplitude
-    hi = df["high"].values[n - 1]
-    lo = df["low"].values[n - 1]
+    hi = cols["high"][n - 1]
+    lo = cols["low"][n - 1]
     if cp > 0:
         amp = (hi - lo) / cp * 100
-        if amp > 7 and close[n - 1] < df["open"].values[n - 1]:
+        if amp > 7 and close[n - 1] < cols["open"][n - 1]:
             score -= 2 if trend <= -1 else 1
             details.append("高振幅收阴")
 
     return _clamp(score), "; ".join(details)
 
 
-def _score_turnover(df, n, trend):
+def _score_turnover(cols, n, trend):
     """换手率分析 — 超短线核心维度.
 
     换手率反映市场参与度和资金活跃度：
@@ -1032,15 +1077,14 @@ def _score_turnover(df, n, trend):
     """
     score, details = 0, []
 
-    turnover_col = "turnover" if "turnover" in df.columns else None
-    if turnover_col is None:
+    if "turnover" not in cols:
         return 0, "无换手率数据"
 
-    turn = _safe(df, n - 1, "turnover")
+    turn = _safe(cols, n - 1, "turnover")
     if not _v(turn):
         return 0, "换手率数据缺失"
 
-    pct = _safe(df, n - 1, "pct_change")
+    pct = _safe(cols, n - 1, "pct_change")
     pv = float(pct) if _v(pct) else 0
 
     # --- 1. 今日换手率绝对水平 (超短线阈值，面向活跃标的) ---
@@ -1114,7 +1158,7 @@ def _score_turnover(df, n, trend):
     if n >= 6:
         turn_5d = []
         for i in range(max(0, n - 6), n - 1):
-            tv = _safe(df, i, "turnover")
+            tv = _safe(cols, i, "turnover")
             if _v(tv):
                 turn_5d.append(tv)
         if turn_5d:
@@ -1177,7 +1221,7 @@ def _score_turnover(df, n, trend):
     if n >= 3:
         high_turn_days = 0
         for i in range(n - 3, n):
-            tv = _safe(df, i, "turnover")
+            tv = _safe(cols, i, "turnover")
             if _v(tv) and tv > 10:
                 high_turn_days += 1
         if high_turn_days >= 3:
@@ -1190,14 +1234,14 @@ def _score_turnover(df, n, trend):
 
     # --- 5. 换手率递增/递减趋势 ---
     if n >= 4:
-        t3 = _safe(df, n - 4, "turnover")
-        t2 = _safe(df, n - 3, "turnover")
-        t1 = _safe(df, n - 2, "turnover")
-        t0 = _safe(df, n - 1, "turnover")
+        t3 = _safe(cols, n - 4, "turnover")
+        t2 = _safe(cols, n - 3, "turnover")
+        t1 = _safe(cols, n - 2, "turnover")
+        t0 = _safe(cols, n - 1, "turnover")
         if all(_v(x) for x in [t3, t2, t1, t0]) and t3 > 0:
             increasing = t3 < t2 < t1 < t0
             decreasing = t3 > t2 > t1 > t0
-            close = df["close"].values
+            close = cols["close"]
             price_up = close[n - 1] > close[n - 4]
             if increasing:
                 if price_up and trend >= 1:
@@ -1220,7 +1264,7 @@ def _score_turnover(df, n, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_divergence(df, n, signals, trend):
+def _score_divergence(cols, n, signals, trend):
     """背离信号 with trend context.
 
     - Top divergence against uptrend: warning (significant)
@@ -1228,7 +1272,7 @@ def _score_divergence(df, n, signals, trend):
     """
     score, details = 0, []
     recent_range = 10
-    date_strs = [str(d)[:10] for d in df["date"].values]
+    date_strs = [str(d)[:10] for d in cols["date"]]
     last_date = date_strs[n - 1] if n > 0 else ""
 
     def _is_recent(sig_list):
@@ -1275,14 +1319,14 @@ def _score_divergence(df, n, signals, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_smart_money(df, n, trend):
+def _score_smart_money(cols, n, trend):
     """主力行为 with trend context."""
     score, details = 0, []
-    close = df["close"].values
-    open_ = df["open"].values
-    high = df["high"].values
-    low = df["low"].values
-    vol = df["volume"].fillna(0).values.astype(np.float64)
+    close = cols["close"]
+    open_ = cols["open"]
+    high = cols["high"]
+    low = cols["low"]
+    vol = cols["volume"]
 
     if n < 5:
         return 0, "数据不足"
@@ -1340,7 +1384,7 @@ def _score_smart_money(df, n, trend):
     va5 = np.mean(vol[max(0, n - 6):n - 1])
     if va5 > 0:
         vr = vol[n - 1] / va5
-        pvv = float(_safe(df, n - 1, "pct_change") or 0)
+        pvv = float(_safe(cols, n - 1, "pct_change") or 0)
         if vr > 2 and abs(pvv) < 1:
             score -= 5 if trend >= 1 else 3
             details.append("放量滞涨" + ("(高位出货)" if trend >= 1 else "(主力出货)"))
@@ -1355,7 +1399,7 @@ def _score_smart_money(df, n, trend):
                 details.append("缩量下跌(洗盘?)")
 
     # Tail manipulation
-    pvv = float(_safe(df, n - 1, "pct_change") or 0)
+    pvv = float(_safe(cols, n - 1, "pct_change") or 0)
     if (hi - cp) / tr < 0.15 and pvv < 2:
         score -= 3 if trend >= 1 else 1
         details.append("疑似拉尾" + ("(诱多)" if trend >= 1 else ""))
@@ -1369,11 +1413,11 @@ def _score_smart_money(df, n, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_meta(df, n, raw_scores, trend):
+def _score_meta(cols, n, raw_scores, trend):
     """Meta: signal consistency + trend confirmation + anti-trap."""
     score, details = 0, []
-    close = df["close"].values
-    vol = df["volume"].fillna(0).values.astype(np.float64)
+    close = cols["close"]
+    vol = cols["volume"]
 
     # 1. Signal consistency
     positive = sum(1 for s in raw_scores if s > 0)
@@ -1402,19 +1446,19 @@ def _score_meta(df, n, raw_scores, trend):
         details.append("趋势确认(空头)")
 
     # 3. Anti-trap
-    ma20 = _safe(df, n - 1, "ma20")
+    ma20 = _safe(cols, n - 1, "ma20")
     cp = close[n - 1]
     if _v(ma20) and ma20 > 0:
         dev = (cp - ma20) / ma20 * 100
         if dev > 8:
-            pct = _safe(df, n - 1, "pct_change")
+            pct = _safe(cols, n - 1, "pct_change")
             va5 = np.mean(vol[max(0, n - 6):n - 1])
             vr = vol[n - 1] / va5 if va5 > 0 else 1
             if _v(pct) and pct > 2 and vr > 2:
                 score -= 5 if trend <= -1 else 3
                 details.append("高位放量" + ("(诱多)" if trend <= -1 else "(警惕)"))
         if dev < -8:
-            pct = _safe(df, n - 1, "pct_change")
+            pct = _safe(cols, n - 1, "pct_change")
             if _v(pct) and pct < -2:
                 score += 4 if trend >= 1 else 2
                 details.append("低位急跌" + ("(洗盘)" if trend >= 1 else "(诱空)"))
@@ -1422,7 +1466,7 @@ def _score_meta(df, n, raw_scores, trend):
     # 4. Post-surge / post-purge
     if n >= 6:
         cum5 = (close[n - 1] / close[n - 6] - 1) * 100 if close[n - 6] > 0 else 0
-        pt = _safe(df, n - 1, "pct_change")
+        pt = _safe(cols, n - 1, "pct_change")
         if cum5 > 10 and _v(pt) and pt < -1:
             if trend >= 1:
                 score += 1
@@ -1447,10 +1491,10 @@ def _score_meta(df, n, raw_scores, trend):
 # Utility
 # ---------------------------------------------------------------------------
 
-def _calc_atr(df, n, period=14):
-    high = df["high"].values
-    low = df["low"].values
-    close = df["close"].values
+def _calc_atr(cols, n, period=14):
+    high = cols["high"]
+    low = cols["low"]
+    close = cols["close"]
     if n < 2:
         return 0
     trs = []
@@ -1481,8 +1525,11 @@ def calc_score(df: pd.DataFrame) -> dict:
             "dimensions": [], "summary": "历史数据不足30天，无法评分",
         }
 
+    # Pre-extract all columns as numpy arrays for fast access
+    cols = _extract_cols(df)
+
     # Detect trend FIRST - all scorers use this
-    trend = _detect_trend(df, n)
+    trend = _detect_trend(cols, n)
 
     zones = calc_support_resistance(df)
     signals = calc_signals(df)
@@ -1491,17 +1538,17 @@ def calc_score(df: pd.DataFrame) -> dict:
     dim_raw = []
 
     scorers = [
-        ("短期动量", 20, _score_momentum, (df, n, trend)),
-        ("换手率", 15, _score_turnover, (df, n, trend)),
-        ("量价配合", 15, _score_volume, (df, n, trend)),
-        ("KDJ状态", 13, _score_kdj, (df, n, trend)),
-        ("主力行为", 10, _score_smart_money, (df, n, trend)),
-        ("MA趋势", 7, _score_ma_trend, (df, n, trend)),
-        ("支撑压力", 7, _score_sr, (df, n, zones, trend)),
-        ("MACD动能", 5, _score_macd, (df, n, trend)),
-        ("背离信号", 4, _score_divergence, (df, n, signals, trend)),
-        ("均线形态", 2, _score_squeeze, (df, n, trend)),
-        ("趋势确认", 2, _score_meta, (df, n, dim_raw, trend)),
+        ("短期动量", 20, _score_momentum, (cols, n, trend)),
+        ("换手率", 15, _score_turnover, (cols, n, trend)),
+        ("量价配合", 15, _score_volume, (cols, n, trend)),
+        ("KDJ状态", 13, _score_kdj, (cols, n, trend)),
+        ("主力行为", 10, _score_smart_money, (cols, n, trend)),
+        ("MA趋势", 7, _score_ma_trend, (cols, n, trend)),
+        ("支撑压力", 7, _score_sr, (cols, n, zones, trend)),
+        ("MACD动能", 5, _score_macd, (cols, n, trend)),
+        ("背离信号", 4, _score_divergence, (cols, n, signals, trend)),
+        ("均线形态", 2, _score_squeeze, (cols, n, trend)),
+        ("趋势确认", 2, _score_meta, (cols, n, dim_raw, trend)),
     ]
 
     for name, weight, fn, args in scorers[:10]:
@@ -1523,7 +1570,7 @@ def calc_score(df: pd.DataFrame) -> dict:
     normalized = 50 + 50 * np.tanh(3.5 * raw_ratio)
     normalized = max(0, min(100, round(normalized)))
 
-    action, hold_advice, summary = _make_advice(normalized, dim_scores, df, n, trend)
+    action, hold_advice, summary = _make_advice(normalized, dim_scores, trend)
 
     return {
         "total": normalized,
@@ -1534,7 +1581,7 @@ def calc_score(df: pd.DataFrame) -> dict:
     }
 
 
-def _make_advice(total, dims, df, n, trend):
+def _make_advice(total, dims, trend):
     trend_names = {2: "强势上升", 1: "上升", 0: "震荡", -1: "下降", -2: "强势下降"}
 
     if total >= 78:

@@ -143,7 +143,7 @@ python3 -m stock_data.fetcher
 python3 web/app.py
 
 # 3. 浏览器访问
-# http://localhost:8080
+# http://localhost:8888
 ```
 
 ---
@@ -220,13 +220,13 @@ python3 -m stock_data.update
 
 ```bash
 python3 web/app.py
-# 访问 http://localhost:8080
+# 访问 http://localhost:8888
 ```
 
 **启动流程：**
 1. 加载股票名称缓存（`data/stock_names.json`），缓存不存在则从 baostock 拉取
 2. 扫描 `data/stocks/` 目录，构建股票索引（仅读取每个文件的最后一行）
-3. 启动 Flask 开发服务器，监听 `0.0.0.0:8080`
+3. 启动 Flask 开发服务器，监听 `0.0.0.0:8888`
 
 **页面操作说明：**
 

@@ -317,6 +317,7 @@ def api_full_scan():
     data = request.get_json(silent=True) or {}
     min_score = int(data.get("min_score", 95))
     min_score = max(0, min(100, min_score))
+    max_price = float(data.get("max_price", 100))
 
     def run_scan():
         import os
@@ -327,8 +328,8 @@ def api_full_scan():
         })
 
         files = sorted(DATA_DIR.glob("*.parquet"))
-        # Pre-filter: skip stocks with close > 100
-        files = [f for f in files if _stock_index.get(f.stem, {}).get("close", 0) <= 100]
+        # Pre-filter: skip stocks with close > max_price
+        files = [f for f in files if _stock_index.get(f.stem, {}).get("close", 0) <= max_price]
         _full_scan_status["total"] = len(files)
 
         from stock_data.scoring import calc_score
@@ -347,9 +348,14 @@ def api_full_scan():
             code = f.stem
             try:
                 pf = pq.ParquetFile(f)
+                total_rows = pf.metadata.num_rows
+                if total_rows < 30:
+                    return None
                 available = set(pf.schema.names)
                 cols = [c for c in _scan_cols if c in available]
-                df = pd.read_parquet(f, columns=cols)
+                # Only read the last 150 rows — scoring only needs recent data
+                tail = min(total_rows, 150)
+                df = pd.read_parquet(f, columns=cols).iloc[-tail:].reset_index(drop=True)
                 if len(df) < 30:
                     return None
                 result = calc_score(df)
@@ -405,9 +411,8 @@ def api_full_scan_status():
         "code": _full_scan_status["code"],
         "min_score": _full_scan_status["min_score"],
         "found": len(_full_scan_status["results"]),
+        "results": list(_full_scan_status["results"]),
     }
-    if _full_scan_status["done"]:
-        status["results"] = list(_full_scan_status["results"])
     return jsonify(status)
 
 
@@ -458,5 +463,5 @@ if __name__ == "__main__":
     build_stock_names()
     build_stock_index()
     print("Starting A-Share Stock Viewer...")
-    print("Open http://localhost:8080 in your browser")
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    print("Open http://localhost:8888 in your browser")
+    app.run(host="0.0.0.0", port=8888, debug=True)
