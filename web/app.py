@@ -310,11 +310,7 @@ def api_watchlist_batch_add():
         code = str(raw_code).strip().zfill(6)
         if not code:
             continue
-        # Remove from other groups
-        for g in groups:
-            if g["id"] != target["id"] and code in g["stocks"]:
-                g["stocks"].remove(code)
-        # Add to target
+        # Add to target (allow stock in multiple groups, don't remove from others)
         if code not in existing:
             target["stocks"].append(code)
             existing.add(code)

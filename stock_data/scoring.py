@@ -87,6 +87,26 @@ def _clamp(x, lo=-10, hi=10):
     return max(lo, min(hi, x))
 
 
+def _recent_limit_up_count(cols, n):
+    """从昨天开始往前数连续涨停天数 (pct >= 9.5).
+
+    返回 0 = 昨天没涨停(今日为首板或非涨停)
+    返回 N = 昨天及之前连续N天涨停(今日为第N+1板)
+    """
+    pct = cols.get("pct_change")
+    if pct is None:
+        return 0
+    count = 0
+    for i in range(n - 2, -1, -1):
+        if i < len(pct):
+            p = pct[i]
+            if not np.isnan(p) and p >= 9.5:
+                count += 1
+            else:
+                break
+    return count
+
+
 # ---------------------------------------------------------------------------
 # Trend Detection  (short-term, 3-10 day window)
 # ---------------------------------------------------------------------------
@@ -880,10 +900,18 @@ def _score_momentum(cols, n, trend):
         score -= 3 if trend >= 1 else 8
         details.append(f"急跌{tp:+.1f}%" if trend >= 1 else f"大跌{tp:+.1f}%")
 
-    # Limit up/down
+    # 涨停/跌停风险评估
     if tp >= 9.5:
-        score += 3
-        details.append("接近涨停")
+        zt_days = _recent_limit_up_count(cols, n)
+        if zt_days == 0:
+            score -= 2
+            details.append("首日涨停(封板难买入)")
+        elif zt_days <= 2:
+            score += 1
+            details.append("连板(趋势确认)")
+        else:
+            score += 2
+            details.append("多连板(极强趋势)")
     elif tp <= -9.5:
         score -= 3
         details.append("接近跌停")
@@ -1538,25 +1566,31 @@ def calc_score(df: pd.DataFrame) -> dict:
     dim_raw = []
 
     scorers = [
-        ("短期动量", 20, _score_momentum, (cols, n, trend)),
-        ("换手率", 15, _score_turnover, (cols, n, trend)),
-        ("量价配合", 15, _score_volume, (cols, n, trend)),
-        ("KDJ状态", 13, _score_kdj, (cols, n, trend)),
-        ("主力行为", 10, _score_smart_money, (cols, n, trend)),
-        ("MA趋势", 7, _score_ma_trend, (cols, n, trend)),
-        ("支撑压力", 7, _score_sr, (cols, n, zones, trend)),
-        ("MACD动能", 5, _score_macd, (cols, n, trend)),
-        ("背离信号", 4, _score_divergence, (cols, n, signals, trend)),
+        ("短期动量", 18, _score_momentum, (cols, n, trend)),
+        ("MACD动能", 16, _score_macd, (cols, n, trend)),
+        ("量价配合", 14, _score_volume, (cols, n, trend)),
+        ("趋势确认", 12, _score_meta, (cols, n, dim_raw, trend)),
+        ("换手率", 11, _score_turnover, (cols, n, trend)),
+        ("支撑压力", 8, _score_sr, (cols, n, zones, trend)),
+        ("主力行为", 7, _score_smart_money, (cols, n, trend)),
+        ("MA趋势", 6, _score_ma_trend, (cols, n, trend)),
+        ("KDJ状态", 4, _score_kdj, (cols, n, trend)),
         ("均线形态", 2, _score_squeeze, (cols, n, trend)),
-        ("趋势确认", 2, _score_meta, (cols, n, dim_raw, trend)),
+        ("背离信号", 2, _score_divergence, (cols, n, signals, trend)),
     ]
 
-    for name, weight, fn, args in scorers[:10]:
+    # 趋势确认(index 3)依赖 dim_raw，放最后执行
+    meta_idx = 3
+    for i in range(len(scorers)):
+        if i == meta_idx:
+            continue
+        name, weight, fn, args = scorers[i]
         s, d = fn(*args)
         dim_raw.append(s)
         dim_scores.append({"name": name, "score": s, "detail": d, "weight": weight})
 
-    name, weight, fn, args = scorers[10]
+    # 最后执行趋势确认
+    name, weight, fn, args = scorers[meta_idx]
     s, d = fn(*args)
     dim_scores.append({"name": name, "score": s, "detail": d, "weight": weight})
 
@@ -1566,9 +1600,15 @@ def calc_score(df: pd.DataFrame) -> dict:
     max_raw = total_weight * 10
 
     raw_ratio = total_raw / max_raw if max_raw > 0 else 0
-    # tanh spreads scores: ratio=0.1→~67, ratio=0.2→~80, ratio=-0.1→~33
-    normalized = 50 + 50 * np.tanh(3.5 * raw_ratio)
+    # tanh(2.5x): ratio=0.1→~62, ratio=0.2→~74, ratio=-0.1→~38
+    normalized = 50 + 50 * np.tanh(2.5 * raw_ratio)
     normalized = max(0, min(100, round(normalized)))
+
+    # 首日涨停降温：封板无法买入 + 次日不确定性大
+    pct_today = _safe(cols, n - 1, "pct_change")
+    if _v(pct_today) and pct_today >= 9.5:
+        if _recent_limit_up_count(cols, n) == 0:
+            normalized = min(normalized, 72)
 
     action, hold_advice, summary = _make_advice(normalized, dim_scores, trend)
 

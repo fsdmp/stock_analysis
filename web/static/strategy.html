@@ -336,7 +336,7 @@ let editingFile = null;
 let currentFile = null;
 let currentName = '';
 let currentResults = [];
-let _sortField = 'pct_change';
+let _sortField = 'score';
 let _sortOrder = 'desc';
 
 // ===== Drag & Drop for sidebar =====
@@ -510,7 +510,93 @@ async function selectStrategy(filename) {
   currentResults = data.results || [];
   const lastTimeEl = document.getElementById('contentLastTime');
   if (lastTimeEl) lastTimeEl.textContent = data.scan_time ? '上次刷新: ' + formatTimeFull(data.scan_time) : '';
+
+  // Merge cached scores before first render to avoid flashing "-"
+  if (currentResults.length) {
+    const codes = currentResults.map(r => r.code);
+    const cached = _getScoreCache(codes);
+    if (cached) {
+      const scoreMap = {};
+      for (const sc of cached) { if (sc.code) scoreMap[sc.code] = { score: sc.total, action: sc.action }; }
+      currentResults.forEach(r => { const sc = scoreMap[r.code]; if (sc) { r.score = sc.score; r.action = sc.action; } });
+    }
+  }
   applySort();
+  loadScores();
+}
+
+// ===== Real-time scoring with cache =====
+let _scoreAbort = null;
+const SCORE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function _scoreCacheKey(codes) {
+  return 'score_cache:' + codes.sort().join(',');
+}
+
+function _getScoreCache(codes) {
+  try {
+    const key = _scoreCacheKey(codes);
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const { ts, data } = JSON.parse(raw);
+    if (Date.now() - ts > SCORE_CACHE_TTL) { localStorage.removeItem(key); return null; }
+    return data;
+  } catch(e) { return null; }
+}
+
+function _setScoreCache(codes, data) {
+  try {
+    const key = _scoreCacheKey(codes);
+    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
+  } catch(e) {}
+}
+
+async function loadScores(forceRefresh) {
+  if (!currentResults.length) return;
+  // Cancel previous request
+  if (_scoreAbort) _scoreAbort.abort();
+  _scoreAbort = new AbortController();
+
+  const codes = currentResults.map(r => r.code);
+
+  // Try cache first
+  if (!forceRefresh) {
+    const cached = _getScoreCache(codes);
+    if (cached) {
+      const scoreMap = {};
+      for (const s of cached) { if (s.code) scoreMap[s.code] = { score: s.total, action: s.action }; }
+      currentResults.forEach(r => { const sc = scoreMap[r.code]; if (sc) { r.score = sc.score; r.action = sc.action; } });
+      applySort();
+      return;
+    }
+  }
+
+  // Show loading state
+  applySort();
+
+  try {
+    const resp = await fetch('/api/batch-score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(codes),
+      signal: _scoreAbort.signal,
+    });
+    const scored = await resp.json();
+    // Merge scores into currentResults
+    const scoreMap = {};
+    for (const s of scored) {
+      if (s.code) scoreMap[s.code] = { score: s.total, action: s.action };
+    }
+    currentResults.forEach(r => {
+      const sc = scoreMap[r.code];
+      if (sc) { r.score = sc.score; r.action = sc.action; }
+    });
+    // Cache results
+    _setScoreCache(codes, scored);
+    applySort();
+  } catch(e) {
+    if (e.name !== 'AbortError') console.error('Score load failed', e);
+  }
 }
 
 // ===== Sort =====
@@ -524,7 +610,7 @@ function applySort() {
 
   const sorted = [...currentResults].sort((a, b) => {
     let va = a[field], vb = b[field];
-    if (field === 'close' || field === 'pct_change') {
+    if (field === 'close' || field === 'pct_change' || field === 'score') {
       va = va || 0; vb = vb || 0;
       return order === 'asc' ? va - vb : vb - va;
     }
@@ -554,6 +640,7 @@ function renderContentTable(results) {
       <th onclick="sortBy('name')">名称<span class="sort-arrow" id="sort-name"></span></th>
       <th onclick="sortBy('close')">现价<span class="sort-arrow" id="sort-close"></span></th>
       <th onclick="sortBy('pct_change')">涨跌幅<span class="sort-arrow" id="sort-pct_change"></span></th>
+      <th onclick="sortBy('score')">评分<span class="sort-arrow" id="sort-score"></span></th>
       <th></th>
     </tr></thead>
     <tbody>${results.map((r, i) => {
@@ -565,6 +652,7 @@ function renderContentTable(results) {
         <td>${r.name || '-'}</td>
         <td>${r.close}</td>
         <td class="${cls}">${sign}${r.pct_change.toFixed(2)}%</td>
+        <td style="${r.score != null ? 'color:' + (r.score >= 63 ? '#e94560' : r.score >= 50 ? '#f39c12' : '#888') + ';font-weight:600' : ''}">${r.score != null ? r.score : '-'}</td>
         <td><button class="s-btn" onclick="window.open('/stock/${r.code}','_blank')" style="padding:4px 10px;font-size:11px">K线</button></td>
       </tr>`;
     }).join('')}</tbody></table>`;
@@ -576,7 +664,7 @@ function renderContentTable(results) {
     sortHeader.parentElement.classList.add('sorted');
     sortHeader.textContent = _sortOrder === 'asc' ? ' ↑' : ' ↓';
   }
-  ['code','name','close','pct_change'].forEach(f => {
+  ['code','name','close','pct_change','score'].forEach(f => {
     if (f !== _sortField) {
       const el = document.getElementById(`sort-${f}`);
       if (el) el.textContent = '';
@@ -589,7 +677,7 @@ function sortBy(field) {
     _sortOrder = _sortOrder === 'asc' ? 'desc' : 'asc';
   } else {
     _sortField = field;
-    _sortOrder = (field === 'pct_change' || field === 'close') ? 'desc' : 'asc';
+    _sortOrder = (field === 'pct_change' || field === 'close' || field === 'score') ? 'desc' : 'asc';
   }
   applySort();
 }
@@ -829,7 +917,7 @@ function renderCondRow(c, i) {
     const maRef = ['ma5','ma7','ma10','ma20'].includes(cond.field) ? cond.field : null;
     let refHtml = '';
     if (cond.op === 'rising') {
-      const refs = ['ma5','ma10','ma20'].map(r=>`<option${cond.field===r?' selected':''}>${r}</option>`).join('');
+      const refs = ['ma5','ma10','ma20'].map(r=>`<option value="${r}"${cond.field===r?' selected':''}>${r.toUpperCase()}</option>`).join('');
       refHtml = `<select class="param-sm" onchange="updCond(${i},'field',this.value)" style="width:64px">${refs}</select>`;
     }
     return `<div class="cond-item"><span class="cond-text">${maRef?cond.field.toUpperCase():'价格'}${label}</span>
@@ -849,10 +937,11 @@ function renderCondRow(c, i) {
       <input class="param-sm" type="number" value="${cond.value}" onchange="updCond(${i},'value',this.value)" style="width:72px">
       </div>${del}</div>`;
   }
-  if (cond.ref && ['ma5','ma7','ma10','ma20'].includes(cond.ref)) {
+  const _ref = (cond.ref || '').toLowerCase();
+  if (_ref && ['ma5','ma7','ma10','ma20'].includes(_ref)) {
     const fieldLabels = {close:'收盘价'};
     const label = fieldLabels[cond.field] || cond.field;
-    const refs = ['ma5','ma7','ma10','ma20'].map(r=>`<option${cond.ref===r?' selected':''}>${r.toUpperCase()}</option>`).join('');
+    const refs = ['ma5','ma7','ma10','ma20'].map(r=>`<option value="${r}"${_ref===r?' selected':''}>${r.toUpperCase()}</option>`).join('');
     return `<div class="cond-item"><span class="cond-text">${label} ${cond.op}</span>
       <div class="param-group"><select class="param-sm" onchange="updCond(${i},'ref',this.value)" style="width:72px">${refs}</select></div>${del}</div>`;
   }
@@ -1046,6 +1135,7 @@ async function refreshScan(filename) {
           const lastTimeEl = document.getElementById('contentLastTime');
           if (lastTimeEl) lastTimeEl.textContent = rdata.scan_time ? '上次刷新: ' + formatTimeFull(rdata.scan_time) : '';
           applySort();
+          loadScores(true);
         }
       }
     } catch(e) {}

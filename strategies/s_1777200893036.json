@@ -36,9 +36,9 @@
       },
       {
         "field": "limit_up_count",
+        "lookback": 7,
         "op": "=",
-        "value": 1,
-        "lookback": 7
+        "value": 1
       }
     ]
   }
