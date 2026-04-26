@@ -848,25 +848,25 @@ def _score_momentum(cols, n, trend):
 
     if tp > 5:
         if trend <= -1:
-            score += 2
+            score += 1
             details.append(f"反弹{tp:+.1f}%(趋势偏弱)")
         else:
-            score += 7
-            details.append(f"大涨{tp:+.1f}%")
+            score += 3
+            details.append(f"大涨{tp:+.1f}%(注意追高风险)")
     elif tp > 3:
         if trend >= 1:
-            score += 6
+            score += 3
             details.append(f"强势上涨{tp:+.1f}%")
         elif trend <= -1:
             score += 1
             details.append(f"反弹{tp:+.1f}%")
         else:
-            score += 4
+            score += 2
             details.append(f"上涨{tp:+.1f}%")
     elif tp > 1:
         if trend >= 1:
-            score += 4
-            details.append(f"上涨{tp:+.1f}%")
+            score += 3
+            details.append(f"上涨{tp:+.1f}%(趋势配合)")
         elif trend <= -1:
             score += 0
             details.append(f"微涨{tp:+.1f}%(趋势偏弱)")
@@ -984,18 +984,18 @@ def _score_momentum(cols, n, trend):
     # 3-day cumulative (trend-contextualized: penalize chasing, reward pullbacks)
     if n >= 4 and close[n - 4] > 0:
         c3 = (close[n - 1] / close[n - 4] - 1) * 100
-        if trend >= 1:  # Uptrend: prefer mild/pullback entries
+        if trend >= 1:  # Uptrend: reward sustained momentum, penalize chasing
             if c3 > 10:
-                score -= 1
-                details.append(f"3日涨{c3:+.1f}%(追高风险)")
+                score -= 2
+                details.append(f"3日涨{c3:+.1f}%(严重过热)")
             elif c3 > 7:
-                score += 0
+                score += 1
                 details.append(f"3日涨{c3:+.1f}%(偏高)")
             elif c3 > 3:
-                score += 1
+                score += 3
                 details.append(f"3日涨{c3:+.1f}%(健康动量)")
             elif c3 > 0:
-                score += 2
+                score += 3
                 details.append(f"3日涨{c3:+.1f}%(温和启动)")
             elif c3 > -3:
                 score += 2
@@ -1029,10 +1029,11 @@ def _score_momentum(cols, n, trend):
                 score += 0
                 details.append(f"3日涨{c3:+.1f}%(突破待确认)")
             elif c3 > 3:
-                score += 1
+                score += 2
                 details.append(f"3日涨{c3:+.1f}%")
             elif c3 > 0:
-                score += 1
+                score += 2
+                details.append(f"3日涨{c3:+.1f}%")
             elif c3 > -5:
                 score -= 1
             else:
@@ -1609,6 +1610,17 @@ def calc_score(df: pd.DataFrame) -> dict:
     if _v(pct_today) and pct_today >= 9.5:
         if _recent_limit_up_count(cols, n) == 0:
             normalized = min(normalized, 72)
+
+    # 过热降温：大涨+远离MA20 = 追高风险极高
+    if _v(pct_today) and pct_today > 0:
+        ma20_val = _safe(cols, n - 1, "ma20")
+        cp = cols["close"][n - 1]
+        if _v(ma20_val) and ma20_val > 0:
+            dev_ma20 = (cp - ma20_val) / ma20_val * 100
+            if pct_today > 3 and dev_ma20 > 5:
+                normalized = min(normalized, 65)
+            elif pct_today > 3 and dev_ma20 > 3:
+                normalized = min(normalized, 72)
 
     action, hold_advice, summary = _make_advice(normalized, dim_scores, trend)
 
