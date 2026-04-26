@@ -47,6 +47,43 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
 }
 #chart { width: 100%; height: calc(100vh - 68px); }
 
+/* Watchlist star button */
+#wlBtn {
+  position: fixed; right: 100px; top: 8px; z-index: 90;
+  padding: 6px 18px; border-radius: 20px; border: 1px solid #0f3460;
+  background: rgba(15,52,96,.3); color: #888; font-size: 13px; cursor: pointer;
+  transition: all .2s; font-weight: 600;
+}
+#wlBtn:hover { border-color: #f1c40f; color: #f1c40f; }
+#wlBtn.active {
+  border-color: #f1c40f; color: #f1c40f;
+  background: rgba(241,196,15,.12);
+  box-shadow: 0 2px 8px rgba(241,196,15,.15);
+}
+
+/* Watchlist popup */
+.wl-popup {
+  display: none; position: fixed; right: 100px; top: 42px; z-index: 95;
+  width: 220px; background: #16213e; border: 1px solid #0f3460;
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  padding: 8px 0;
+}
+.wl-popup.show { display: block; }
+.wl-popup-title { font-size: 12px; color: #555; padding: 4px 14px 8px; }
+.wl-popup-item {
+  padding: 8px 14px; font-size: 13px; cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center;
+  transition: background .15s;
+}
+.wl-popup-item:hover { background: #0f3460; }
+.wl-popup-item .check { color: #f1c40f; font-size: 12px; }
+.wl-popup-sep { height: 1px; background: #0f3460; margin: 4px 0; }
+.wl-popup-remove {
+  padding: 8px 14px; font-size: 12px; color: #e74c3c; cursor: pointer;
+  transition: background .15s;
+}
+.wl-popup-remove:hover { background: rgba(231,76,60,.1); }
+
 /* Score button */
 #scoreBtn {
   position: fixed; right: 12px; top: 8px; z-index: 90;
@@ -225,6 +262,8 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
   <div class="info-grid" id="infoGrid"></div>
 </div>
 
+<button id="wlBtn" onclick="toggleWlPopup()">&#9734; 自选</button>
+<div class="wl-popup" id="wlPopup"></div>
 <button id="scoreBtn" onclick="toggleScorePanel()">评分</button>
 <div id="scorePanel" class="score-panel"></div>
 <div id="chart"></div>
@@ -1239,6 +1278,11 @@ function renderScorePanel(data) {
 // Keyboard shortcut: S to toggle score
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    const wlPop = document.getElementById('wlPopup');
+    if (wlPop.classList.contains('show')) {
+      wlPop.classList.remove('show');
+      return;
+    }
     const scoreOv = document.getElementById('scoreOverlay');
     if (scoreOv.classList.contains('active')) {
       scoreOv.classList.remove('active');
@@ -1250,6 +1294,117 @@ document.addEventListener('keydown', (e) => {
     toggleScorePanel();
   }
 });
+
+// === Watchlist ===
+let _wlGroups = [];  // groups this stock is in
+
+async function checkWatchlist() {
+  if (!currentCode) return;
+  try {
+    const resp = await fetch(`/api/watchlist/check/${currentCode}`);
+    if (resp.status === 401) {
+      document.getElementById('wlBtn').style.display = 'none';
+      return;
+    }
+    const data = await resp.json();
+    _wlGroups = data.groups || [];
+    updateWlBtn();
+  } catch(e) {}
+}
+
+function updateWlBtn() {
+  const btn = document.getElementById('wlBtn');
+  if (_wlGroups.length > 0) {
+    btn.innerHTML = '&#9733; 自选';
+    btn.classList.add('active');
+  } else {
+    btn.innerHTML = '&#9734; 自选';
+    btn.classList.remove('active');
+  }
+}
+
+function toggleWlPopup() {
+  const popup = document.getElementById('wlPopup');
+  // If not logged in, redirect to login
+  fetch('/api/check').then(r => {
+    if (r.status === 401) {
+      window.location.href = '/login';
+      return;
+    }
+    if (popup.classList.contains('show')) {
+      popup.classList.remove('show');
+      return;
+    }
+    renderWlPopup();
+    popup.classList.add('show');
+  });
+}
+
+async function renderWlPopup() {
+  const popup = document.getElementById('wlPopup');
+  // Fetch all groups
+  const resp = await fetch('/api/watchlist');
+  const groups = await resp.json();
+
+  let html = '<div class="wl-popup-title">添加到分组</div>';
+  const inGroups = new Set(_wlGroups.map(g => g.id));
+
+  groups.forEach(g => {
+    const checked = inGroups.has(g.id);
+    html += `<div class="wl-popup-item" onclick="wlToggle('${g.id}')">
+      <span>${escHtml(g.name)}</span>
+      ${checked ? '<span class="check">&#10003;</span>' : ''}
+    </div>`;
+  });
+
+  if (_wlGroups.length > 0) {
+    html += '<div class="wl-popup-sep"></div>';
+    _wlGroups.forEach(g => {
+      html += `<div class="wl-popup-remove" onclick="wlRemove('${g.id}')">从「${escHtml(g.name)}」移除</div>`;
+    });
+  }
+
+  popup.innerHTML = html;
+}
+
+async function wlToggle(gid) {
+  const inGroup = _wlGroups.some(g => g.id === gid);
+  if (inGroup) {
+    await wlRemove(gid);
+  } else {
+    await fetch('/api/watchlist/stock', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code: currentCode, group_id: gid}),
+    });
+    await checkWatchlist();
+    renderWlPopup();
+  }
+}
+
+async function wlRemove(gid) {
+  await fetch('/api/watchlist/stock', {
+    method: 'DELETE',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({code: currentCode, group_id: gid}),
+  });
+  await checkWatchlist();
+  renderWlPopup();
+}
+
+// Close popup on outside click
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#wlBtn') && !e.target.closest('#wlPopup')) {
+    document.getElementById('wlPopup').classList.remove('show');
+  }
+});
+
+// Hook into loadStock to check watchlist status
+const _origLoadStock = loadStock;
+loadStock = async function(code) {
+  await _origLoadStock(code);
+  checkWatchlist();
+};
 </script>
 </body>
 </html>

@@ -1,0 +1,20 @@
+{
+  "name": "底部缩量企稳",
+  "description": "连续下跌后缩量企稳，KDJ超卖区金叉，MACD底背离，换手率地量",
+  "version": "2.0",
+  "tags": ["底部反转", "超卖", "缩量"],
+  "filter": {
+    "logic": "AND",
+    "rules": [
+      { "field": "trading_status", "op": "contains", "value": "交易" },
+      { "field": "is_st", "op": "=", "value": false },
+      { "field": "continuous_down", "op": ">=", "value": 4 },
+      { "field": "kdj_k", "op": "in_zone", "value": "超卖" },
+      { "field": "kdj_k", "op": "cross_above", "ref": "kdj_d" },
+      { "field": "vol_price", "op": "vol_price", "value": "地量" },
+      { "field": "turnover", "op": "<", "value": 3 },
+      { "field": "close", "op": "<=", "ref": "ma5" },
+      { "field": "pct_change_sum", "op": "<", "value": -10, "lookback": 10 }
+    ]
+  }
+}

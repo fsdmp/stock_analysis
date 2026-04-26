@@ -45,8 +45,11 @@ def get_mainboard_stocks() -> pd.DataFrame:
         code = row[0]  # e.g. sh.600000
         name = row[1]
         pure_code = code.split(".")[1] if "." in code else code
-        if pure_code.startswith("60") or pure_code.startswith("00"):
-            market = code.split(".")[0]
+        market = code.split(".")[0]
+        # sh.000xxx are Shanghai indices, not stocks — only keep sz.000xxx
+        if pure_code.startswith("60") and market == "sh":
+            results.append({"code": pure_code, "name": name, "market": market})
+        elif pure_code.startswith("00") and market == "sz":
             results.append({"code": pure_code, "name": name, "market": market})
 
     df = pd.DataFrame(results)

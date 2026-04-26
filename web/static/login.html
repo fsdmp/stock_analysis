@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 - A股数据分析平台</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e; color: #e0e0e0;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+}
+.login-card {
+  width: 360px; padding: 40px; background: #16213e;
+  border: 1px solid #0f3460; border-radius: 12px;
+}
+.login-card h2 {
+  text-align: center; margin-bottom: 8px; color: #e94560; font-size: 22px;
+}
+.login-card .sub {
+  text-align: center; font-size: 13px; color: #555; margin-bottom: 30px;
+}
+.field { margin-bottom: 18px; }
+.field label { display: block; font-size: 13px; color: #888; margin-bottom: 6px; }
+.field input {
+  width: 100%; padding: 12px 16px; background: #1a1a2e;
+  border: 1px solid #0f3460; border-radius: 6px;
+  color: #fff; font-size: 15px; outline: none; transition: border-color .2s;
+}
+.field input:focus { border-color: #e94560; }
+.btn-login {
+  width: 100%; padding: 12px; border: none; border-radius: 6px;
+  background: #e94560; color: #fff; font-size: 15px; cursor: pointer;
+  transition: opacity .2s; margin-top: 6px;
+}
+.btn-login:hover { opacity: .85; }
+.error {
+  display: none; text-align: center; color: #e94560; font-size: 13px; margin-top: 14px;
+}
+</style>
+</head>
+<body>
+<div class="login-card">
+  <h2>A股数据分析平台</h2>
+  <div class="sub">请登录以继续</div>
+  <div class="field">
+    <label>账号</label>
+    <input id="username" type="text" placeholder="请输入账号" autofocus>
+  </div>
+  <div class="field">
+    <label>密码</label>
+    <input id="password" type="password" placeholder="请输入密码">
+  </div>
+  <button class="btn-login" onclick="doLogin()">登 录</button>
+  <div class="error" id="errorMsg"></div>
+</div>
+<script>
+document.getElementById('password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+document.getElementById('username').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('password').focus();
+});
+
+async function doLogin() {
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+  const errEl = document.getElementById('errorMsg');
+  errEl.style.display = 'none';
+  if (!username || !password) {
+    errEl.textContent = '请输入账号和密码';
+    errEl.style.display = 'block';
+    return;
+  }
+  try {
+    const resp = await fetch('/api/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, password}),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      window.location.href = '/';
+    } else {
+      errEl.textContent = data.error || '登录失败';
+      errEl.style.display = 'block';
+    }
+  } catch(e) {
+    errEl.textContent = '网络错误';
+    errEl.style.display = 'block';
+  }
+}
+</script>
+</body>
+</html>

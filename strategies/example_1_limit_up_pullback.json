@@ -1,0 +1,45 @@
+{
+  "name": "00涨停回踩均线",
+  "description": "00开头，非ST非跌停，收盘价站稳5日线，4天前涨停且7天内仅1次涨停",
+  "version": "2.0",
+  "tags": [],
+  "filter": {
+    "logic": "AND",
+    "rules": [
+      {
+        "field": "code_prefix",
+        "op": "in",
+        "value": [
+          "00"
+        ]
+      },
+      {
+        "field": "is_st",
+        "op": "=",
+        "value": false
+      },
+      {
+        "field": "is_limit_down",
+        "op": "=",
+        "value": false
+      },
+      {
+        "field": "close",
+        "op": ">",
+        "ref": "ma5"
+      },
+      {
+        "field": "is_limit_up",
+        "offset": 4,
+        "op": "=",
+        "value": true
+      },
+      {
+        "field": "limit_up_count",
+        "lookback": 7,
+        "op": "=",
+        "value": 1
+      }
+    ]
+  }
+}

@@ -107,6 +107,7 @@ body {
   <h1>A股数据分析平台</h1>
   <div class="nav-right">
     <span class="status" id="status"></span>
+    <span id="authBtn"></span>
   </div>
 </div>
 
@@ -120,7 +121,9 @@ body {
 
   <div class="actions">
     <button class="btn btn-update" id="updateBtn" onclick="triggerUpdate()">&#128260; 更新数据</button>
-    <button class="btn btn-tool" onclick="window.location.href='/recommend'">&#127919; 股票推荐</button>
+    <button class="btn btn-tool" onclick="goAuth('/watchlist')">&#9734; 自选股</button>
+    <button class="btn btn-tool" id="recommendBtn" onclick="goAuth('/recommend')">&#127919; 股票推荐</button>
+    <button class="btn btn-tool" id="strategyBtn" onclick="goAuth('/strategy')">&#128270; 策略选股</button>
   </div>
 
   <div class="progress-wrap" id="progressWrap">
@@ -182,6 +185,7 @@ function goStock(code) {
 
 // Update
 async function triggerUpdate() {
+  if (!_loggedIn) { window.location.href = '/login'; return; }
   if (!confirm('确认更新所有股票数据？更新期间可能会持续较长时间。')) return;
   const btn = document.getElementById('updateBtn');
   btn.classList.add('running');
@@ -220,6 +224,41 @@ async function pollStatus() {
 }
 
 pollStatus();
+
+// Auth state
+let _loggedIn = false;
+
+async function checkAuth() {
+  try {
+    const resp = await fetch('/api/check');
+    const data = await resp.json();
+    _loggedIn = data.logged_in;
+  } catch(e) {
+    _loggedIn = false;
+  }
+  const authBtn = document.getElementById('authBtn');
+  if (_loggedIn) {
+    authBtn.innerHTML = '<button class="btn btn-tool" onclick="doLogout()" style="padding:6px 14px;font-size:12px;">退出</button>';
+  } else {
+    authBtn.innerHTML = '<button class="btn btn-tool" onclick="window.location.href=\'/login\'" style="padding:6px 14px;font-size:12px;">登录</button>';
+  }
+}
+
+function goAuth(path) {
+  if (_loggedIn) {
+    window.location.href = path;
+  } else {
+    window.location.href = '/login';
+  }
+}
+
+async function doLogout() {
+  await fetch('/api/logout', {method:'POST'});
+  _loggedIn = false;
+  checkAuth();
+}
+
+checkAuth();
 </script>
 </body>
 </html>

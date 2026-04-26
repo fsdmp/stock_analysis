@@ -1,0 +1,1084 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>策略选股 - A股数据分析平台</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
+
+/* Nav */
+.nav { display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: #16213e; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
+.back-btn { padding: 5px 12px; background: transparent; border: 1px solid #333; border-radius: 6px; color: #888; font-size: 13px; cursor: pointer; transition: all .2s; }
+.back-btn:hover { border-color: #e94560; color: #e94560; }
+.nav-title { font-size: 16px; color: #e0e0e0; font-weight: 600; }
+.nav-right { margin-left: auto; }
+.btn-new { padding: 8px 20px; background: #e94560; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .2s; }
+.btn-new:hover { background: #c73850; }
+
+/* Main layout: sidebar + content */
+.main-layout { display: flex; flex: 1; overflow: hidden; }
+
+/* Sidebar */
+.sidebar { width: 320px; min-width: 280px; background: #16213e; border-right: 1px solid #0f3460; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+.sidebar-header { padding: 16px 18px; font-size: 14px; font-weight: 600; color: #888; border-bottom: 1px solid #0f3460; display: flex; align-items: center; justify-content: space-between; }
+.sidebar-header .count { font-size: 12px; color: #555; font-weight: 400; }
+.sidebar-list { flex: 1; overflow-y: auto; padding: 8px 0; }
+.sidebar-list::-webkit-scrollbar { width: 4px; }
+.sidebar-list::-webkit-scrollbar-thumb { background: #0f3460; border-radius: 2px; }
+
+/* Strategy card in sidebar */
+.s-item { padding: 12px 18px 12px 24px; cursor: pointer; border-left: 3px solid transparent; transition: background .15s, opacity .15s; position: relative; }
+.s-item:hover { background: rgba(15,52,96,.3); }
+.s-item.active { background: rgba(15,52,96,.5); border-left-color: #e94560; }
+.s-item.dragging { opacity: .4; }
+.s-item.drag-over { border-top: 2px solid #e94560; }
+.s-item .drag-handle { position: absolute; left: 4px; top: 50%; transform: translateY(-50%); color: #333; font-size: 12px; cursor: grab; padding: 4px 2px; line-height: 1; user-select: none; }
+.s-item .drag-handle:hover { color: #666; }
+.s-item-name { font-size: 14px; font-weight: 600; color: #e0e0e0; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+.s-item-name .badge { font-size: 11px; font-weight: 500; padding: 1px 6px; border-radius: 3px; background: rgba(233,69,96,.15); color: #e94560; }
+.s-item-desc { font-size: 11px; color: #555; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s-item-meta { display: flex; gap: 12px; margin-top: 6px; font-size: 11px; color: #444; }
+.s-item-meta .meta-val { color: #888; font-weight: 600; }
+.s-item-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.s-tag { padding: 1px 6px; background: rgba(52,152,219,.1); color: #3498db; border-radius: 3px; font-size: 10px; }
+
+/* Content area */
+.content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* Content header */
+.content-header { padding: 16px 24px; border-bottom: 1px solid #0f3460; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; }
+.content-title { font-size: 16px; font-weight: 600; }
+.content-actions { display: flex; gap: 8px; align-items: center; }
+.s-btn { padding: 6px 14px; border-radius: 6px; border: 1px solid #2a2a4a; background: transparent; color: #aaa; font-size: 12px; cursor: pointer; transition: all .2s; }
+.s-btn:hover { border-color: #e94560; color: #e94560; }
+.s-btn.primary { background: #0f3460; border-color: #0f3460; color: #e0e0e0; }
+.s-btn.primary:hover { background: #1a4a7a; border-color: #1a4a7a; }
+.s-btn.danger:hover { border-color: #e74c3c; color: #e74c3c; }
+
+/* Sort controls */
+.sort-bar { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #666; }
+.sort-bar select { padding: 4px 8px; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 12px; outline: none; cursor: pointer; }
+.sort-bar select:focus { border-color: #e94560; }
+
+/* Results table */
+.content-body { flex: 1; overflow-y: auto; padding: 0 24px 24px; }
+.content-body::-webkit-scrollbar { width: 6px; }
+.content-body::-webkit-scrollbar-thumb { background: #0f3460; border-radius: 3px; }
+
+.res-table { width: 100%; border-collapse: collapse; }
+.res-table th { text-align: left; font-size: 11px; color: #555; padding: 10px 12px; border-bottom: 1px solid #0f3460; font-weight: 500; cursor: pointer; user-select: none; white-space: nowrap; transition: color .15s; }
+.res-table th:hover { color: #e94560; }
+.res-table th.sorted { color: #e94560; }
+.res-table th .sort-arrow { margin-left: 4px; font-size: 10px; }
+.res-table td { padding: 10px 12px; border-bottom: 1px solid rgba(15,52,96,.3); font-size: 13px; }
+.res-table tr:hover td { background: rgba(15,52,96,.3); }
+.res-table .code-cell { color: #3498db; cursor: pointer; }
+.res-table .code-cell:hover { text-decoration: underline; }
+.up { color: #e74c3c; }
+.down { color: #2ecc71; }
+.res-empty { text-align: center; padding: 80px 24px; color: #333; font-size: 14px; }
+.res-empty-icon { font-size: 48px; opacity: .3; margin-bottom: 12px; }
+.res-empty p { font-size: 12px; color: #444; margin-top: 6px; }
+
+/* Empty content (no strategy selected) */
+.content-placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #333; }
+.content-placeholder-icon { font-size: 56px; opacity: .2; margin-bottom: 16px; }
+.content-placeholder p { font-size: 13px; }
+
+/* Sidebar empty */
+.sidebar-empty { padding: 40px 20px; text-align: center; color: #333; font-size: 12px; }
+.sidebar-empty-icon { font-size: 36px; opacity: .3; margin-bottom: 8px; }
+
+/* === Editor === */
+.editor-overlay { display: none; position: fixed; inset: 0; z-index: 100; background: rgba(26,26,46,.9); backdrop-filter: blur(4px); align-items: flex-start; justify-content: center; padding-top: 40px; overflow-y: auto; }
+.editor-overlay.active { display: flex; }
+.editor { background: #16213e; border: 1px solid #0f3460; border-radius: 12px; padding: 24px; width: 640px; max-width: 95vw; margin-bottom: 40px; }
+.editor-title { font-size: 15px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; }
+.ed-row { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+.ed-label { font-size: 12px; color: #888; width: 64px; flex-shrink: 0; text-align: right; }
+.ed-input { flex: 1; min-width: 200px; padding: 8px 12px; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 6px; color: #e0e0e0; font-size: 13px; outline: none; }
+.ed-input:focus { border-color: #e94560; }
+.ed-input::placeholder { color: #444; }
+
+/* Condition list */
+.cond-list { margin-top: 16px; }
+.cond-item { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.cond-text { flex: 1; font-size: 13px; color: #e0e0e0; min-width: 150px; }
+.cond-del { width: 24px; height: 24px; border: none; background: transparent; color: #555; font-size: 16px; cursor: pointer; border-radius: 4px; transition: all .15s; flex-shrink: 0; }
+.cond-del:hover { color: #e94560; background: rgba(233,69,96,.1); }
+
+/* Add condition */
+.add-cond { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+.add-sel { padding: 8px 12px; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 6px; color: #e0e0e0; font-size: 13px; outline: none; cursor: pointer; }
+.add-sel:focus { border-color: #e94560; }
+.add-btn { padding: 8px 16px; background: #0f3460; color: #e0e0e0; border: 1px solid #0f3460; border-radius: 6px; font-size: 13px; cursor: pointer; transition: all .2s; white-space: nowrap; }
+.add-btn:hover { background: #1a4a7a; }
+.add-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* Condition param inputs */
+.param-group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.param-sm { width: 64px; padding: 4px 8px; background: #16213e; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 12px; text-align: center; outline: none; }
+.param-sm:focus { border-color: #e94560; }
+.param-label { font-size: 11px; color: #666; white-space: nowrap; }
+.param-check { display: flex; gap: 8px; flex-wrap: wrap; }
+.p-chip { padding: 3px 10px; background: #0f3460; border-radius: 4px; font-size: 12px; cursor: pointer; transition: all .15s; user-select: none; }
+.p-chip.on { background: #e94560; color: #fff; }
+.p-chip:hover { opacity: .85; }
+
+/* Editor actions */
+.ed-actions { display: flex; gap: 10px; margin-top: 20px; }
+.ed-save { padding: 10px 28px; background: #e94560; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all .2s; }
+.ed-save:hover { background: #c73850; }
+.ed-cancel { padding: 10px 20px; background: transparent; color: #888; border: 1px solid #2a2a3e; border-radius: 8px; font-size: 14px; cursor: pointer; transition: all .2s; }
+.ed-cancel:hover { border-color: #555; color: #ccc; }
+
+/* Overlay (scan progress) */
+.overlay { display: none; position: fixed; inset: 0; z-index: 50; background: rgba(26,26,46,.85); backdrop-filter: blur(4px); flex-direction: column; align-items: center; justify-content: center; }
+.overlay.active { display: flex; }
+.ov-spin { width: 36px; height: 36px; border: 3px solid #0f3460; border-top-color: #e94560; border-radius: 50%; animation: spin .7s linear infinite; margin-bottom: 14px; }
+.ov-text { font-size: 14px; color: #888; }
+.ov-sub { font-size: 12px; color: #555; margin-top: 6px; }
+.ov-prog { width: 260px; height: 6px; background: #0f3460; border-radius: 3px; overflow: hidden; margin-top: 12px; }
+.ov-prog > div { height: 100%; background: #e94560; border-radius: 3px; transition: width .3s; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <button class="back-btn" onclick="location.href='/'">&#8592;</button>
+  <span class="nav-title">策略选股</span>
+  <div class="nav-right">
+    <button class="btn-new" onclick="openEditor()">+ 新建策略</button>
+  </div>
+</div>
+
+<div class="main-layout">
+  <!-- Sidebar: strategy list -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <span>策略分组</span>
+      <span class="count" id="sidebarCount"></span>
+    </div>
+    <div class="sidebar-list" id="sidebarList"></div>
+  </div>
+
+  <!-- Content: results -->
+  <div class="content" id="contentArea">
+    <!-- Placeholder -->
+    <div class="content-placeholder" id="contentPlaceholder">
+      <div class="content-placeholder-icon">&#128200;</div>
+      <p>选择左侧策略查看筛选结果</p>
+    </div>
+
+    <!-- Result header (hidden by default) -->
+    <div class="content-header" id="contentHeader" style="display:none">
+      <div>
+        <div class="content-title" id="contentTitle">策略名称</div>
+        <div style="display:flex;gap:12px;margin-top:2px;align-items:center">
+          <div class="s-item-desc" id="contentDesc"></div>
+          <div style="font-size:11px;color:#e94560;font-weight:600" id="contentLastTime"></div>
+        </div>
+      </div>
+      <div class="content-actions">
+        <button class="s-btn primary" id="btnRefresh" onclick="refreshScan(currentFile)">刷新数据</button>
+        <button class="s-btn" id="btnWatchlist" onclick="batchAddWatchlist()" style="display:none">&#9734; 加入自选</button>
+        <button class="s-btn" id="btnEdit" onclick="editStrategy(currentFile)">编辑</button>
+        <button class="s-btn danger" id="btnDelete" onclick="deleteStrategy(currentFile, currentName)">删除</button>
+      </div>
+    </div>
+
+    <!-- Result body -->
+    <div class="content-body" id="contentBody" style="display:none"></div>
+  </div>
+</div>
+
+<!-- Editor overlay -->
+<div class="editor-overlay" id="editorOverlay">
+  <div class="editor">
+    <div class="editor-title">
+      <span id="editorTitle">新建策略</span>
+      <button class="cond-del" onclick="closeEditor()" style="width:auto;font-size:20px">&times;</button>
+    </div>
+    <div class="ed-row">
+      <span class="ed-label">名称</span>
+      <input class="ed-input" id="edName" placeholder="例如：涨停回踩均线">
+    </div>
+    <div class="ed-row">
+      <span class="ed-label">描述</span>
+      <input class="ed-input" id="edDesc" placeholder="简要描述策略逻辑">
+    </div>
+    <div class="cond-list" id="condList"></div>
+    <div class="add-cond">
+      <select class="add-sel" id="addCategory" onchange="onCategoryChange()">
+        <option value="">-- 选择类别 --</option>
+      </select>
+      <select class="add-sel" id="addPreset" onchange="onPresetChange()">
+        <option value="">-- 选择条件 --</option>
+      </select>
+      <div id="paramArea"></div>
+      <button class="add-btn" id="addBtn" onclick="addCondition()" disabled>+ 添加</button>
+    </div>
+    <div class="ed-actions">
+      <button class="ed-save" onclick="saveStrategy()">保存策略</button>
+      <button class="ed-cancel" onclick="closeEditor()">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- Overlay (scan progress) -->
+<div class="overlay" id="overlay">
+  <div class="ov-spin"></div>
+  <div class="ov-text" id="ovText">正在扫描...</div>
+  <div class="ov-sub" id="ovSub"></div>
+  <div class="ov-prog"><div id="ovBar" style="width:0"></div></div>
+</div>
+
+<script>
+// ===== Presets =====
+const PRESETS = {
+  "基础筛选": [
+    { id: "prefix", label: "代码前缀", type: "prefix" },
+    { id: "not_st", label: "非ST股", type: "fixed", cond: { field: "is_st", op: "=", value: false } },
+    { id: "trading", label: "交易中", type: "fixed", cond: { field: "trading_status", op: "contains", value: "交易" } },
+    { id: "limit_up", label: "涨停", type: "bool_offset", field: "is_limit_up", defaultVal: true },
+    { id: "limit_down", label: "跌停", type: "bool_offset", field: "is_limit_down", defaultVal: true },
+    { id: "not_limit_up", label: "非涨停", type: "bool_offset", field: "is_limit_up", defaultVal: false },
+    { id: "not_limit_down", label: "非跌停", type: "bool_offset", field: "is_limit_down", defaultVal: false },
+  ],
+  "行情指标": [
+    { id: "pct_change", label: "涨跌幅(%)", type: "cmp_val", field: "pct_change" },
+    { id: "close", label: "收盘价", type: "cmp_val", field: "close" },
+    { id: "close_gt_ma", label: "收盘价站上均线", type: "ref_cmp", field: "close", op: ">", refs: ["ma5","ma7","ma10","ma20"], refLabel: "MA" },
+    { id: "close_lt_ma", label: "收盘价跌破均线", type: "ref_cmp", field: "close", op: "<", refs: ["ma5","ma7","ma10","ma20"], refLabel: "MA" },
+    { id: "turnover", label: "换手率(%)", type: "cmp_val", field: "turnover" },
+    { id: "vol_ratio", label: "量比", type: "cmp_val", field: "vol_ratio" },
+    { id: "volume", label: "成交量", type: "cmp_val", field: "volume" },
+    { id: "amount", label: "成交额", type: "cmp_val", field: "amount" },
+  ],
+  "均线系统": [
+    { id: "ma_bull", label: "多头排列", type: "ma_align", value: "多头排列" },
+    { id: "ma_bear", label: "空头排列", type: "ma_align", value: "空头排列" },
+    { id: "ma_squeeze", label: "均线粘合", type: "ma_align", value: "粘合" },
+  ],
+  "MACD": [
+    { id: "macd_golden", label: "MACD金叉", type: "fixed", cond: { field: "macd_dif", op: "cross_above", ref: "macd_dea" } },
+    { id: "macd_death", label: "MACD死叉", type: "fixed", cond: { field: "macd_dif", op: "cross_below", ref: "macd_dea" } },
+    { id: "macd_above0", label: "零轴上方", type: "zone", field: "macd_dif", value: "零轴上方" },
+    { id: "macd_below0", label: "零轴下方", type: "zone", field: "macd_dif", value: "零轴下方" },
+    { id: "red_bar", label: "红柱", type: "zone", field: "macd_hist", value: "红柱" },
+    { id: "green_bar", label: "绿柱", type: "zone", field: "macd_hist", value: "绿柱" },
+    { id: "red_expand", label: "红柱放大", type: "zone", field: "macd_hist", value: "红柱放大" },
+    { id: "green_expand", label: "绿柱放大", type: "zone", field: "macd_hist", value: "绿柱放大" },
+  ],
+  "KDJ": [
+    { id: "kdj_golden", label: "KDJ金叉", type: "fixed", cond: { field: "kdj_k", op: "cross_above", ref: "kdj_d" } },
+    { id: "kdj_death", label: "KDJ死叉", type: "fixed", cond: { field: "kdj_k", op: "cross_below", ref: "kdj_d" } },
+    { id: "kdj_ob", label: "KDJ超买", type: "zone", field: "kdj_k", value: "超买" },
+    { id: "kdj_os", label: "KDJ超卖", type: "zone", field: "kdj_k", value: "超卖" },
+  ],
+  "K线形态": [
+    { id: "kline_dayang", label: "大阳线", type: "kline", value: "大阳线" },
+    { id: "kline_dayin", label: "大阴线", type: "kline", value: "大阴线" },
+    { id: "kline_cross", label: "十字星", type: "kline", value: "十字星" },
+    { id: "kline_upper", label: "长上影", type: "kline", value: "长上影" },
+    { id: "kline_lower", label: "长下影", type: "kline", value: "长下影" },
+    { id: "kline_yizi", label: "一字板", type: "kline", value: "一字板" },
+    { id: "kline_t", label: "T字板", type: "kline", value: "T字板" },
+    { id: "kline_it", label: "倒T字板", type: "kline", value: "倒T字板" },
+    { id: "kline_hammer", label: "锤子线", type: "kline", value: "锤子线" },
+    { id: "kline_ihammer", label: "倒锤子", type: "kline", value: "倒锤子" },
+  ],
+  "量价关系": [
+    { id: "vp_up", label: "放量上涨", type: "vol_price", value: "放量上涨" },
+    { id: "vp_down", label: "放量下跌", type: "vol_price", value: "放量下跌" },
+    { id: "vp_sup", label: "缩量上涨", type: "vol_price", value: "缩量上涨" },
+    { id: "vp_sdn", label: "缩量下跌", type: "vol_price", value: "缩量下跌" },
+    { id: "vp_stall", label: "放量滞涨", type: "vol_price", value: "放量滞涨" },
+    { id: "vp_sky", label: "天量", type: "vol_price", value: "天量" },
+    { id: "vp_gnd", label: "地量", type: "vol_price", value: "地量" },
+  ],
+  "布林带": [
+    { id: "bb_above_u", label: "突破上轨", type: "zone", field: "close", value: "布林上轨外" },
+    { id: "bb_below_l", label: "跌破下轨", type: "zone", field: "close", value: "布林下轨外" },
+    { id: "bb_above_m", label: "中轨上方", type: "zone", field: "close", value: "布林中轨上" },
+    { id: "bb_below_m", label: "中轨下方", type: "zone", field: "close", value: "布林中轨下" },
+  ],
+  "趋势": [
+    { id: "new_high", label: "N日新高", type: "lookback_op", field: "close", op: "is_new_high", defLb: 20 },
+    { id: "new_low", label: "N日新低", type: "lookback_op", field: "close", op: "is_new_low", defLb: 20 },
+    { id: "cont_up", label: "连涨天数", type: "cmp_val", field: "continuous_up" },
+    { id: "cont_down", label: "连跌天数", type: "cmp_val", field: "continuous_down" },
+    { id: "cont_lu", label: "连续涨停", type: "cmp_val", field: "continuous_limit_up" },
+    { id: "cont_ld", label: "连续跌停", type: "cmp_val", field: "continuous_limit_down" },
+    { id: "rising_ma", label: "均线上行", type: "lookback_rising", field: "ma5", op: "rising", defLb: 5 },
+  ],
+  "统计": [
+    { id: "lu_count", label: "N日涨停次数", type: "lb_cmp", field: "limit_up_count", defLb: 7 },
+    { id: "ld_count", label: "N日跌停次数", type: "lb_cmp", field: "limit_down_count", defLb: 7 },
+    { id: "pct_sum", label: "N日累计涨跌幅", type: "lb_cmp", field: "pct_change_sum", defLb: 5 },
+    { id: "turn_avg", label: "N日平均换手率", type: "lb_cmp", field: "turnover_avg", defLb: 5 },
+    { id: "amt_avg", label: "N日平均成交额", type: "lb_cmp", field: "amount_avg", defLb: 5 },
+  ],
+};
+
+const CMP_OPS = [
+  { v: ">", l: ">" }, { v: ">=", l: "≥" }, { v: "<", l: "<" },
+  { v: "<=", l: "≤" }, { v: "=", l: "=" }, { v: "!=", l: "≠" },
+];
+
+// ===== State =====
+let strategies = [];
+let conditions = [];
+let editingFile = null;
+let currentFile = null;
+let currentName = '';
+let currentResults = [];
+let _sortField = 'pct_change';
+let _sortOrder = 'desc';
+
+// ===== Drag & Drop for sidebar =====
+function onDragStart(e) {
+  const item = e.target.closest('.s-item');
+  if (!item) return;
+  _dragSrcFilename = item.dataset.filename;
+  item.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', _dragSrcFilename);
+}
+
+function onDragEnd(e) {
+  _dragSrcFilename = null;
+  document.querySelectorAll('.s-item').forEach(el => {
+    el.classList.remove('dragging', 'drag-over');
+  });
+}
+
+function onDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const item = e.target.closest('.s-item');
+  if (!item || item.dataset.filename === _dragSrcFilename) return;
+  // Only show indicator on the target
+  document.querySelectorAll('.s-item.drag-over').forEach(el => el.classList.remove('drag-over'));
+  item.classList.add('drag-over');
+}
+
+function onDragLeave(e) {
+  const item = e.target.closest('.s-item');
+  if (item) item.classList.remove('drag-over');
+}
+
+function onDrop(e) {
+  e.preventDefault();
+  const target = e.target.closest('.s-item');
+  if (!target || !_dragSrcFilename) return;
+  const targetFilename = target.dataset.filename;
+  if (targetFilename === _dragSrcFilename) return;
+
+  // Reorder strategies array
+  const srcIdx = strategies.findIndex(s => s.filename === _dragSrcFilename);
+  const tgtIdx = strategies.findIndex(s => s.filename === targetFilename);
+  if (srcIdx < 0 || tgtIdx < 0) return;
+  const [moved] = strategies.splice(srcIdx, 1);
+  strategies.splice(tgtIdx, 0, moved);
+
+  renderSidebar();
+  saveStrategyOrder();
+}
+
+function saveStrategyOrder() {
+  const order = strategies.map(s => s.filename);
+  localStorage.setItem('strategy_order', JSON.stringify(order));
+}
+
+function loadStrategyOrder() {
+  try {
+    return JSON.parse(localStorage.getItem('strategy_order')) || [];
+  } catch(e) { return []; }
+}
+
+// ===== Init =====
+(function init() {
+  const catSel = document.getElementById('addCategory');
+  Object.keys(PRESETS).forEach(cat => {
+    const opt = document.createElement('option');
+    opt.value = cat; opt.textContent = cat;
+    catSel.appendChild(opt);
+  });
+  loadStrategies();
+})();
+
+// ===== Strategy List =====
+async function loadStrategies() {
+  const resp = await fetch('/api/strategies');
+  const raw = await resp.json();
+  // Apply saved order
+  const order = loadStrategyOrder();
+  const ordered = [];
+  const remaining = [];
+  for (const s of raw) {
+    const idx = order.indexOf(s.filename);
+    if (idx >= 0) ordered.push({ idx, s });
+    else remaining.push(s);
+  }
+  ordered.sort((a, b) => a.idx - b.idx);
+  strategies = ordered.map(x => x.s).concat(remaining);
+  renderSidebar();
+}
+
+function renderSidebar() {
+  const el = document.getElementById('sidebarList');
+  const countEl = document.getElementById('sidebarCount');
+  countEl.textContent = strategies.length + ' 个策略';
+
+  if (!strategies.length) {
+    el.innerHTML = `<div class="sidebar-empty"><div class="sidebar-empty-icon">&#128200;</div><p>暂无策略<br>点击「新建策略」开始</p></div>`;
+    return;
+  }
+
+  el.innerHTML = strategies.map(s => `
+    <div class="s-item${currentFile === s.filename ? ' active' : ''}" id="sitem-${s.filename}"
+         draggable="true" data-filename="${s.filename}"
+         onclick="selectStrategy('${s.filename}')"
+         ondragstart="onDragStart(event)" ondragend="onDragEnd(event)"
+         ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+      <span class="drag-handle" title="拖拽排序">&#9776;</span>
+      <div class="s-item-name">
+        ${esc(s.name || s.filename)}
+        <span class="badge" id="cnt-${s.filename}">-</span>
+      </div>
+      ${s.description ? `<div class="s-item-desc">${esc(s.description)}</div>` : ''}
+      <div class="s-item-meta">
+        <span id="time-${s.filename}"></span>
+      </div>
+      ${s.tags && s.tags.length ? `<div class="s-item-tags">${s.tags.map(t=>`<span class="s-tag">${t}</span>`).join('')}</div>` : ''}
+    </div>`).join('');
+
+  strategies.forEach(s => loadResultMeta(s.filename));
+}
+
+function esc(s) { return (s||'').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+
+async function loadResultMeta(filename) {
+  try {
+    const resp = await fetch(`/api/strategy/${filename}/results`);
+    const data = await resp.json();
+    const cntEl = document.getElementById(`cnt-${filename}`);
+    const timeEl = document.getElementById(`time-${filename}`);
+    if (cntEl) cntEl.textContent = data.count != null ? data.count + ' 只' : '-';
+    if (timeEl && data.scan_time) timeEl.textContent = formatTime(data.scan_time);
+  } catch(e) {}
+}
+
+function formatTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+function formatTimeFull(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+}
+
+// ===== Select strategy =====
+async function selectStrategy(filename) {
+  currentFile = filename;
+  const s = strategies.find(x => x.filename === filename);
+  currentName = s ? (s.name || s.filename) : filename;
+
+  // Update sidebar active
+  document.querySelectorAll('.s-item').forEach(el => el.classList.remove('active'));
+  const item = document.getElementById(`sitem-${filename}`);
+  if (item) item.classList.add('active');
+
+  // Show content
+  document.getElementById('contentPlaceholder').style.display = 'none';
+  document.getElementById('contentHeader').style.display = '';
+  document.getElementById('contentBody').style.display = '';
+
+  document.getElementById('contentTitle').textContent = currentName;
+  document.getElementById('contentDesc').textContent = s && s.description ? s.description : '';
+
+  // Load results
+  const resp = await fetch(`/api/strategy/${filename}/results`);
+  const data = await resp.json();
+  currentResults = data.results || [];
+  const lastTimeEl = document.getElementById('contentLastTime');
+  if (lastTimeEl) lastTimeEl.textContent = data.scan_time ? '上次刷新: ' + formatTimeFull(data.scan_time) : '';
+  applySort();
+}
+
+// ===== Sort =====
+function applySort() {
+  if (!currentResults.length) {
+    renderContentTable([]);
+    return;
+  }
+  const field = _sortField;
+  const order = _sortOrder;
+
+  const sorted = [...currentResults].sort((a, b) => {
+    let va = a[field], vb = b[field];
+    if (field === 'close' || field === 'pct_change') {
+      va = va || 0; vb = vb || 0;
+      return order === 'asc' ? va - vb : vb - va;
+    }
+    va = (va || '').toString(); vb = (vb || '').toString();
+    const cmp = va.localeCompare(vb, 'zh');
+    return order === 'asc' ? cmp : -cmp;
+  });
+  renderContentTable(sorted);
+}
+
+function renderContentTable(results) {
+  const el = document.getElementById('contentBody');
+  const wlBtn = document.getElementById('btnWatchlist');
+  if (!results || !results.length) {
+    el.innerHTML = `<div class="res-empty"><div class="res-empty-icon">&#128269;</div>暂无数据<div class="res-empty"><p>请点击「刷新数据」执行策略扫描</p></div></div>`;
+    wlBtn.style.display = 'none';
+    return;
+  }
+  wlBtn.style.display = '';
+  wlBtn.innerHTML = '&#9734; 加入自选';
+  wlBtn.style.color = '';
+  wlBtn.style.borderColor = '';
+  el.innerHTML = `<table class="res-table">
+    <thead><tr>
+      <th>#</th>
+      <th onclick="sortBy('code')">代码<span class="sort-arrow" id="sort-code"></span></th>
+      <th onclick="sortBy('name')">名称<span class="sort-arrow" id="sort-name"></span></th>
+      <th onclick="sortBy('close')">现价<span class="sort-arrow" id="sort-close"></span></th>
+      <th onclick="sortBy('pct_change')">涨跌幅<span class="sort-arrow" id="sort-pct_change"></span></th>
+      <th></th>
+    </tr></thead>
+    <tbody>${results.map((r, i) => {
+      const cls = r.pct_change >= 0 ? 'up' : 'down';
+      const sign = r.pct_change >= 0 ? '+' : '';
+      return `<tr>
+        <td style="color:#555">${i+1}</td>
+        <td class="code-cell" onclick="window.open('/stock/${r.code}','_blank')">${r.code}</td>
+        <td>${r.name || '-'}</td>
+        <td>${r.close}</td>
+        <td class="${cls}">${sign}${r.pct_change.toFixed(2)}%</td>
+        <td><button class="s-btn" onclick="window.open('/stock/${r.code}','_blank')" style="padding:4px 10px;font-size:11px">K线</button></td>
+      </tr>`;
+    }).join('')}</tbody></table>`;
+
+  // Update sort indicators
+  document.querySelectorAll('.res-table th').forEach(th => th.classList.remove('sorted'));
+  const sortHeader = document.getElementById(`sort-${_sortField}`);
+  if (sortHeader) {
+    sortHeader.parentElement.classList.add('sorted');
+    sortHeader.textContent = _sortOrder === 'asc' ? ' ↑' : ' ↓';
+  }
+  ['code','name','close','pct_change'].forEach(f => {
+    if (f !== _sortField) {
+      const el = document.getElementById(`sort-${f}`);
+      if (el) el.textContent = '';
+    }
+  });
+}
+
+function sortBy(field) {
+  if (_sortField === field) {
+    _sortOrder = _sortOrder === 'asc' ? 'desc' : 'asc';
+  } else {
+    _sortField = field;
+    _sortOrder = (field === 'pct_change' || field === 'close') ? 'desc' : 'asc';
+  }
+  applySort();
+}
+
+// ===== Editor =====
+function openEditor(filename) {
+  editingFile = filename || null;
+  conditions = [];
+  document.getElementById('edName').value = '';
+  document.getElementById('edDesc').value = '';
+  document.getElementById('condList').innerHTML = '';
+  document.getElementById('editorTitle').textContent = filename ? '编辑策略' : '新建策略';
+  document.getElementById('addCategory').value = '';
+  document.getElementById('addPreset').innerHTML = '<option value="">-- 选择条件 --</option>';
+  document.getElementById('paramArea').innerHTML = '';
+  document.getElementById('addBtn').disabled = true;
+  document.getElementById('editorOverlay').classList.add('active');
+
+  if (filename) {
+    fetch(`/api/strategy/${filename}/definition`).then(r=>r.json()).then(data => {
+      if (data.error) return;
+      document.getElementById('edName').value = data.name || '';
+      document.getElementById('edDesc').value = data.description || '';
+      if (data.filter && data.filter.rules) {
+        data.filter.rules.forEach(rule => {
+          if (!rule.logic) {
+            const text = condToText(rule);
+            conditions.push({ cond: rule, text });
+          }
+        });
+        renderConditions();
+      }
+    }).catch(()=>{});
+  }
+}
+
+function closeEditor() {
+  document.getElementById('editorOverlay').classList.remove('active');
+  editingFile = null;
+  conditions = [];
+}
+
+function onCategoryChange() {
+  const cat = document.getElementById('addCategory').value;
+  const presetSel = document.getElementById('addPreset');
+  presetSel.innerHTML = '<option value="">-- 选择条件 --</option>';
+  document.getElementById('paramArea').innerHTML = '';
+  document.getElementById('addBtn').disabled = true;
+  if (!cat || !PRESETS[cat]) return;
+  PRESETS[cat].forEach((p, i) => {
+    const opt = document.createElement('option');
+    opt.value = i; opt.textContent = p.label;
+    presetSel.appendChild(opt);
+  });
+}
+
+function onPresetChange() {
+  const cat = document.getElementById('addCategory').value;
+  const idx = document.getElementById('addPreset').value;
+  const area = document.getElementById('paramArea');
+  area.innerHTML = '';
+  document.getElementById('addBtn').disabled = true;
+  if (!cat || idx === '') return;
+  const preset = PRESETS[cat][parseInt(idx)];
+  if (!preset) return;
+  document.getElementById('addBtn').disabled = false;
+
+  if (preset.type === 'prefix') {
+    area.innerHTML = `<div class="param-check">${['00','60','30','68'].map(p=>`<span class="p-chip" data-v="${p}" onclick="toggleChip(this)">${p}</span>`).join('')}</div>`;
+  } else if (preset.type === 'cmp_val') {
+    area.innerHTML = `<div class="param-group">
+      <select class="param-sm" id="pOp">${CMP_OPS.map(o=>`<option value="${o.v}">${o.l}</option>`).join('')}</select>
+      <input class="param-sm" id="pVal" type="number" placeholder="值" style="width:80px">
+    </div>`;
+  } else if (preset.type === 'ref_cmp') {
+    area.innerHTML = `<div class="param-group">
+      <select class="param-sm" id="pRef">${preset.refs.map(r=>`<option value="${r}">${r.toUpperCase()}</option>`).join('')}</select>
+    </div>`;
+  } else if (preset.type === 'bool_offset') {
+    area.innerHTML = `<div class="param-group">
+      <span class="param-label">N天前</span>
+      <input class="param-sm" id="pOffset" type="number" value="0" min="0" style="width:56px">
+    </div>`;
+  } else if (preset.type === 'ma_align') {
+    area.innerHTML = `<div class="param-check">${['ma5','ma10','ma20'].map(m=>`<span class="p-chip on" data-v="${m}" onclick="toggleChip(this)">${m.toUpperCase()}</span>`).join('')}</div>`;
+  } else if (preset.type === 'kline') {
+    area.innerHTML = `<div class="param-group">
+      <span class="param-label">N天前</span>
+      <input class="param-sm" id="pOffset" type="number" value="0" min="0" style="width:56px">
+    </div>`;
+  } else if (preset.type === 'lookback_op') {
+    area.innerHTML = `<div class="param-group">
+      <span class="param-label">最近</span>
+      <input class="param-sm" id="pLb" type="number" value="${preset.defLb}" min="2" style="width:56px">
+      <span class="param-label">天</span>
+    </div>`;
+  } else if (preset.type === 'lookback_rising') {
+    area.innerHTML = `<div class="param-group">
+      <select class="param-sm" id="pRef">${['ma5','ma10','ma20'].map(r=>`<option value="${r}">${r.toUpperCase()}</option>`).join('')}</select>
+      <span class="param-label">最近</span>
+      <input class="param-sm" id="pLb" type="number" value="${preset.defLb}" min="2" style="width:56px">
+      <span class="param-label">天上升</span>
+    </div>`;
+  } else if (preset.type === 'lb_cmp') {
+    area.innerHTML = `<div class="param-group">
+      <span class="param-label">最近</span>
+      <input class="param-sm" id="pLb" type="number" value="${preset.defLb}" min="2" style="width:56px">
+      <span class="param-label">天</span>
+      <select class="param-sm" id="pOp">${CMP_OPS.map(o=>`<option value="${o.v}">${o.l}</option>`).join('')}</select>
+      <input class="param-sm" id="pVal" type="number" placeholder="值" style="width:80px">
+    </div>`;
+  }
+}
+
+function toggleChip(el) { el.classList.toggle('on'); }
+
+function addCondition() {
+  const cat = document.getElementById('addCategory').value;
+  const idx = parseInt(document.getElementById('addPreset').value);
+  if (!cat || isNaN(idx)) return;
+  const preset = PRESETS[cat][idx];
+  let cond = {}, text = '';
+
+  if (preset.type === 'fixed') {
+    cond = { ...preset.cond };
+    text = preset.label;
+  } else if (preset.type === 'prefix') {
+    const vals = [...document.querySelectorAll('#paramArea .p-chip.on')].map(e => e.dataset.v);
+    if (!vals.length) { alert('请选择至少一个前缀'); return; }
+    cond = { field: 'code_prefix', op: 'in', value: vals };
+    text = `代码前缀 ${vals.join('/')}`;
+  } else if (preset.type === 'cmp_val') {
+    const op = document.getElementById('pOp').value;
+    const val = parseFloat(document.getElementById('pVal').value);
+    if (isNaN(val)) { alert('请输入数值'); return; }
+    cond = { field: preset.field, op, value: val };
+    text = `${preset.label} ${op} ${val}`;
+  } else if (preset.type === 'ref_cmp') {
+    const ref = document.getElementById('pRef').value;
+    cond = { field: preset.field, op: preset.op, ref };
+    text = `${preset.label} ${preset.op === '>' ? '>' : '<'} ${ref.toUpperCase()}`;
+  } else if (preset.type === 'bool_offset') {
+    const offset = parseInt(document.getElementById('pOffset')?.value || 0);
+    cond = { field: preset.field, op: '=', value: preset.defaultVal };
+    if (offset > 0) cond.offset = offset;
+    text = offset > 0 ? `${offset}天前 ${preset.label}` : preset.label;
+  } else if (preset.type === 'ma_align') {
+    const mas = [...document.querySelectorAll('#paramArea .p-chip.on')].map(e => e.dataset.v);
+    if (mas.length < 2) { alert('请选择至少2条均线'); return; }
+    cond = { field: 'ma_align', op: '=', value: preset.value, mas };
+    text = `均线${preset.value} (${mas.map(m=>m.toUpperCase()).join('/')})`;
+  } else if (preset.type === 'kline') {
+    const offset = parseInt(document.getElementById('pOffset')?.value || 0);
+    cond = { field: 'kline', op: 'is_shape', value: preset.value };
+    if (offset > 0) cond.offset = offset;
+    text = offset > 0 ? `${offset}天前 ${preset.label}` : preset.label;
+  } else if (preset.type === 'vol_price') {
+    cond = { field: 'vol_price', op: 'vol_price', value: preset.value };
+    text = preset.label;
+  } else if (preset.type === 'zone') {
+    cond = { field: preset.field, op: 'in_zone', value: preset.value };
+    text = preset.label;
+  } else if (preset.type === 'lookback_op') {
+    const lb = parseInt(document.getElementById('pLb')?.value || preset.defLb);
+    cond = { field: preset.field, op: preset.op, lookback: lb };
+    text = `${lb}日${preset.label.replace('N日','')}`;
+  } else if (preset.type === 'lookback_rising') {
+    const ref = document.getElementById('pRef')?.value || preset.field;
+    const lb = parseInt(document.getElementById('pLb')?.value || preset.defLb);
+    cond = { field: ref, op: 'rising', lookback: lb };
+    text = `${ref.toUpperCase()} 连续${lb}天上升`;
+  } else if (preset.type === 'lb_cmp') {
+    const lb = parseInt(document.getElementById('pLb')?.value || preset.defLb);
+    const op = document.getElementById('pOp')?.value || '=';
+    const val = parseFloat(document.getElementById('pVal')?.value);
+    if (isNaN(val)) { alert('请输入数值'); return; }
+    cond = { field: preset.field, op, value: val, lookback: lb };
+    text = `最近${lb}天 ${preset.label.replace('N日','')} ${op} ${val}`;
+  }
+
+  conditions.push({ cond, text });
+  renderConditions();
+  document.getElementById('addCategory').value = '';
+  document.getElementById('addPreset').innerHTML = '<option value="">-- 选择条件 --</option>';
+  document.getElementById('paramArea').innerHTML = '';
+  document.getElementById('addBtn').disabled = true;
+}
+
+function renderConditions() {
+  const el = document.getElementById('condList');
+  if (!conditions.length) { el.innerHTML = '<div style="font-size:12px;color:#444;padding:8px 0;">尚未添加条件，请从下方选择</div>'; return; }
+  el.innerHTML = conditions.map((c, i) => renderCondRow(c, i)).join('');
+}
+
+function renderCondRow(c, i) {
+  const cond = c.cond;
+  const del = `<button class="cond-del" onclick="removeCond(${i})">&times;</button>`;
+  if (cond.field === 'code_prefix') {
+    const vals = Array.isArray(cond.value) ? cond.value : [cond.value];
+    const chips = ['00','60','30','68'].map(p =>
+      `<span class="p-chip${vals.includes(p)?' on':''}" onclick="toggleCondPrefix(${i},'${p}',this)">${p}</span>`
+    ).join('');
+    return `<div class="cond-item"><span class="cond-text">代码前缀</span><div class="param-check">${chips}</div>${del}</div>`;
+  }
+  if (['cross_above','cross_below'].includes(cond.op) || cond.op === 'vol_price' ||
+      cond.op === 'in_zone' || cond.field === 'is_st' || cond.field === 'trading_status') {
+    return `<div class="cond-item"><span class="cond-text">${c.text}</span>${del}</div>`;
+  }
+  if (['is_limit_up','is_limit_down'].includes(cond.field) && typeof cond.value === 'boolean') {
+    return `<div class="cond-item"><span class="cond-text">${cond.value?'':'非'}${cond.field==='is_limit_up'?'涨停':'跌停'}</span>
+      <div class="param-group"><span class="param-label">N天前</span>
+      <input class="param-sm" type="number" min="0" value="${cond.offset||0}" onchange="updCond(${i},'offset',this.value)" style="width:56px">
+      </div>${del}</div>`;
+  }
+  if (cond.field === 'kline') {
+    const shapes = ['大阳线','大阴线','十字星','长上影','长下影','一字板','T字板','倒T字板','锤子线','倒锤子'];
+    const opts = shapes.map(s=>`<option value="${s}"${cond.value===s?' selected':''}>${s}</option>`).join('');
+    return `<div class="cond-item"><span class="cond-text">K线形态</span>
+      <div class="param-group">
+      <select class="param-sm" onchange="updCond(${i},'value',this.value)" style="width:80px">${opts}</select>
+      <span class="param-label">N天前</span>
+      <input class="param-sm" type="number" min="0" value="${cond.offset||0}" onchange="updCond(${i},'offset',this.value)" style="width:56px">
+      </div>${del}</div>`;
+  }
+  if (cond.field === 'ma_align') {
+    const mas = cond.mas || ['ma5','ma10','ma20'];
+    const chips = ['ma5','ma7','ma10','ma20'].map(m =>
+      `<span class="p-chip${mas.includes(m)?' on':''}" onclick="toggleCondMa(${i},'${m}',this)">${m.toUpperCase()}</span>`
+    ).join('');
+    const types = ['多头排列','空头排列','粘合'].map(t=>`<option${cond.value===t?' selected':''}>${t}</option>`).join('');
+    return `<div class="cond-item"><span class="cond-text">均线</span>
+      <div class="param-group"><select class="param-sm" onchange="updCond(${i},'value',this.value)" style="width:80px">${types}</select>
+      <div class="param-check">${chips}</div></div>${del}</div>`;
+  }
+  if (['is_new_high','is_new_low','rising'].includes(cond.op)) {
+    const label = cond.op==='is_new_high'?'新高':cond.op==='is_new_low'?'新低':'上升';
+    const maRef = ['ma5','ma7','ma10','ma20'].includes(cond.field) ? cond.field : null;
+    let refHtml = '';
+    if (cond.op === 'rising') {
+      const refs = ['ma5','ma10','ma20'].map(r=>`<option${cond.field===r?' selected':''}>${r}</option>`).join('');
+      refHtml = `<select class="param-sm" onchange="updCond(${i},'field',this.value)" style="width:64px">${refs}</select>`;
+    }
+    return `<div class="cond-item"><span class="cond-text">${maRef?cond.field.toUpperCase():'价格'}${label}</span>
+      <div class="param-group">${refHtml}<span class="param-label">最近</span>
+      <input class="param-sm" type="number" min="2" value="${cond.lookback||20}" onchange="updCond(${i},'lookback',this.value)" style="width:56px">
+      <span class="param-label">天</span></div>${del}</div>`;
+  }
+  if (cond.lookback !== undefined && cond.value !== undefined && typeof cond.value === 'number') {
+    const fieldLabels = {limit_up_count:'涨停次数',limit_down_count:'跌停次数',pct_change_sum:'累计涨跌幅',turnover_avg:'平均换手率',amount_avg:'平均成交额',vol_ratio_avg:'平均量比'};
+    const label = fieldLabels[cond.field] || cond.field;
+    const ops = CMP_OPS.map(o=>`<option value="${o.v}"${cond.op===o.v?' selected':''}>${o.l}</option>`).join('');
+    return `<div class="cond-item"><span class="cond-text">最近</span>
+      <div class="param-group">
+      <input class="param-sm" type="number" min="2" value="${cond.lookback}" onchange="updCond(${i},'lookback',this.value)" style="width:56px">
+      <span class="param-label">天${label}</span>
+      <select class="param-sm" onchange="updCond(${i},'op',this.value)" style="width:48px">${ops}</select>
+      <input class="param-sm" type="number" value="${cond.value}" onchange="updCond(${i},'value',this.value)" style="width:72px">
+      </div>${del}</div>`;
+  }
+  if (cond.ref && ['ma5','ma7','ma10','ma20'].includes(cond.ref)) {
+    const fieldLabels = {close:'收盘价'};
+    const label = fieldLabels[cond.field] || cond.field;
+    const refs = ['ma5','ma7','ma10','ma20'].map(r=>`<option${cond.ref===r?' selected':''}>${r.toUpperCase()}</option>`).join('');
+    return `<div class="cond-item"><span class="cond-text">${label} ${cond.op}</span>
+      <div class="param-group"><select class="param-sm" onchange="updCond(${i},'ref',this.value)" style="width:72px">${refs}</select></div>${del}</div>`;
+  }
+  if (cond.value !== undefined && typeof cond.value === 'number') {
+    const fieldLabels = {pct_change:'涨跌幅(%)',close:'收盘价',turnover:'换手率(%)',vol_ratio:'量比',volume:'成交量',amount:'成交额',continuous_up:'连涨天数',continuous_down:'连跌天数',continuous_limit_up:'连续涨停',continuous_limit_down:'连续跌停'};
+    const label = fieldLabels[cond.field] || cond.field;
+    const ops = CMP_OPS.map(o=>`<option value="${o.v}"${cond.op===o.v?' selected':''}>${o.l}</option>`).join('');
+    return `<div class="cond-item"><span class="cond-text">${label}</span>
+      <div class="param-group"><select class="param-sm" onchange="updCond(${i},'op',this.value)" style="width:48px">${ops}</select>
+      <input class="param-sm" type="number" value="${cond.value}" onchange="updCond(${i},'value',this.value)" style="width:80px">
+      </div>${del}</div>`;
+  }
+  return `<div class="cond-item"><span class="cond-text">${c.text}</span>${del}</div>`;
+}
+
+function updCond(i, key, val) {
+  const c = conditions[i].cond;
+  if (key === 'value' || key === 'lookback' || key === 'offset') {
+    c[key] = parseFloat(val) || 0;
+    if (key === 'offset' && c[key] === 0) delete c.offset;
+  } else {
+    c[key] = val;
+  }
+  conditions[i].text = condToText(c);
+}
+
+function toggleCondPrefix(i, val, el) {
+  el.classList.toggle('on');
+  const chips = el.parentElement.querySelectorAll('.p-chip.on');
+  conditions[i].cond.value = [...chips].map(c => c.dataset.v);
+  conditions[i].text = `代码前缀 ${conditions[i].cond.value.join('/')}`;
+}
+
+function toggleCondMa(i, val, el) {
+  el.classList.toggle('on');
+  const chips = el.parentElement.querySelectorAll('.p-chip.on');
+  const mas = [...chips].map(c => c.dataset.v);
+  if (mas.length >= 2) {
+    conditions[i].cond.mas = mas;
+    conditions[i].text = `均线${conditions[i].cond.value} (${mas.map(m=>m.toUpperCase()).join('/')})`;
+  }
+}
+
+function removeCond(i) {
+  conditions.splice(i, 1);
+  renderConditions();
+}
+
+async function saveStrategy() {
+  const name = document.getElementById('edName').value.trim();
+  const desc = document.getElementById('edDesc').value.trim();
+  if (!name) { alert('请输入策略名称'); return; }
+  if (!conditions.length) { alert('请至少添加一个条件'); return; }
+
+  const strategy = {
+    name,
+    description: desc,
+    version: "2.0",
+    tags: [],
+    filter: { logic: "AND", rules: conditions.map(c => c.cond) },
+  };
+
+  let filename = editingFile;
+  if (!filename) {
+    filename = 's_' + Date.now();
+  }
+
+  const resp = await fetch('/api/strategy/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename, strategy }),
+  });
+  const data = await resp.json();
+  if (data.error) { alert(data.error); return; }
+
+  closeEditor();
+  await loadStrategies();
+  // Auto select the saved strategy
+  selectStrategy(filename);
+}
+
+async function editStrategy(filename) {
+  const resp = await fetch(`/api/strategy/${filename}/definition`);
+  const data = await resp.json();
+  if (data.error) { alert(data.error); return; }
+
+  editingFile = filename;
+  conditions = [];
+  document.getElementById('edName').value = data.name || '';
+  document.getElementById('edDesc').value = data.description || '';
+  document.getElementById('editorTitle').textContent = '编辑策略';
+
+  if (data.filter && data.filter.rules) {
+    data.filter.rules.forEach(rule => {
+      if (!rule.logic) {
+        conditions.push({ cond: rule, text: condToText(rule) });
+      }
+    });
+  }
+  renderConditions();
+  document.getElementById('editorOverlay').classList.add('active');
+}
+
+function condToText(rule) {
+  const f = rule.field;
+  const op = rule.op;
+  const v = rule.value;
+  const ref = rule.ref;
+  const offset = rule.offset || 0;
+  const lb = rule.lookback;
+  const mas = rule.mas;
+
+  if (f === 'code_prefix') return `代码前缀 ${Array.isArray(v) ? v.join('/') : v}`;
+  if (f === 'is_st') return v ? 'ST股' : '非ST股';
+  if (f === 'trading_status') return `交易中`;
+  if (f === 'is_limit_up') return (offset ? `${offset}天前 ` : '') + (v ? '涨停' : '非涨停');
+  if (f === 'is_limit_down') return (offset ? `${offset}天前 ` : '') + (v ? '跌停' : '非跌停');
+  if (f === 'kline') return (offset ? `${offset}天前 ` : '') + v;
+  if (f === 'vol_price') return v;
+  if (f === 'ma_align') return `均线${v} (${(mas||[]).map(m=>m.toUpperCase()).join('/')})`;
+  if (op === 'in_zone') return v;
+  if (op === 'cross_above') return `${f.replace('macd_dif','MACD').replace('kdj_k','KDJ')}金叉`;
+  if (op === 'cross_below') return `${f.replace('macd_dif','MACD').replace('kdj_k','KDJ')}死叉`;
+  if (op === 'is_new_high') return `${lb}日新高`;
+  if (op === 'is_new_low') return `${lb}日新低`;
+  if (op === 'rising') return `${f.toUpperCase()} 连续${lb}天上升`;
+
+  const fieldLabels = {
+    pct_change: '涨跌幅', close: '收盘价', turnover: '换手率', vol_ratio: '量比',
+    volume: '成交量', amount: '成交额', continuous_up: '连涨', continuous_down: '连跌',
+    continuous_limit_up: '连续涨停', continuous_limit_down: '连续跌停',
+  };
+  if (f === 'limit_up_count') return `最近${lb}天涨停次数 ${op} ${v}`;
+  if (f === 'limit_down_count') return `最近${lb}天跌停次数 ${op} ${v}`;
+  if (f === 'pct_change_sum') return `最近${lb}天累计涨跌幅 ${op} ${v}`;
+  if (f === 'turnover_avg') return `最近${lb}天平均换手率 ${op} ${v}`;
+  if (f === 'amount_avg') return `最近${lb}天平均成交额 ${op} ${v}`;
+  if (ref) return `${fieldLabels[f]||f} ${op} ${ref.toUpperCase()}`;
+
+  return `${fieldLabels[f]||f} ${op} ${v}`;
+}
+
+async function deleteStrategy(filename, name) {
+  if (!confirm(`确定删除策略「${name}」？删除后不可恢复。`)) return;
+  await fetch(`/api/strategy/${filename}`, { method: 'DELETE' });
+  if (currentFile === filename) {
+    currentFile = null;
+    currentName = '';
+    currentResults = [];
+    document.getElementById('contentPlaceholder').style.display = '';
+    document.getElementById('contentHeader').style.display = 'none';
+    document.getElementById('contentBody').style.display = 'none';
+  }
+  await loadStrategies();
+}
+
+// ===== Scan (Refresh) =====
+async function refreshScan(filename) {
+  if (!filename) return;
+  if (document.getElementById('overlay').classList.contains('active')) {
+    alert('已有扫描任务进行中'); return;
+  }
+  if (!confirm('确定要刷新该策略的扫描数据吗？')) return;
+  const ov = document.getElementById('overlay');
+  ov.classList.add('active');
+  document.getElementById('ovText').textContent = '策略扫描中...';
+  document.getElementById('ovSub').textContent = '';
+  document.getElementById('ovBar').style.width = '0';
+
+  await fetch('/api/strategy/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ strategy: filename }),
+  });
+
+  const timer = setInterval(async () => {
+    try {
+      const resp = await fetch('/api/strategy/scan/status');
+      const d = await resp.json();
+      const pct = d.total > 0 ? (d.current / d.total * 100).toFixed(0) : 0;
+      document.getElementById('ovSub').textContent = `${d.current} / ${d.total}`;
+      document.getElementById('ovBar').style.width = pct + '%';
+      if (!d.running && d.done) {
+        clearInterval(timer);
+        ov.classList.remove('active');
+        await loadStrategies();
+        if (currentFile === filename) {
+          const rresp = await fetch(`/api/strategy/${filename}/results`);
+          const rdata = await rresp.json();
+          currentResults = rdata.results || [];
+          const lastTimeEl = document.getElementById('contentLastTime');
+          if (lastTimeEl) lastTimeEl.textContent = rdata.scan_time ? '上次刷新: ' + formatTimeFull(rdata.scan_time) : '';
+          applySort();
+        }
+      }
+    } catch(e) {}
+  }, 800);
+}
+
+// ===== Batch add to watchlist =====
+async function batchAddWatchlist() {
+  if (!currentResults.length) { alert('当前无扫描结果'); return; }
+  const now = new Date();
+  const dateStr = String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0');
+  const groupName = currentName + dateStr;
+  const codes = currentResults.map(r => r.code);
+  const btn = document.getElementById('btnWatchlist');
+  btn.textContent = '添加中...';
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/watchlist/batch-add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ group_name: groupName, codes }),
+    });
+    const data = await resp.json();
+    if (data.error) { alert(data.error); return; }
+    btn.innerHTML = '&#9733; 已添加(' + data.total + '只)';
+    btn.style.color = '#f1c40f';
+    btn.style.borderColor = '#f1c40f';
+  } catch(e) {
+    alert('添加失败: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "name": "连板接力",
+  "description": "连续涨停2天以上，换手率适中(5-15%)，非一字板，量能配合",
+  "version": "2.0",
+  "tags": ["连板", "打板", "超短线"],
+  "filter": {
+    "logic": "AND",
+    "rules": [
+      { "field": "is_st", "op": "=", "value": false },
+      { "field": "continuous_limit_up", "op": ">=", "value": 2 },
+      { "field": "kline", "op": "is_shape", "value": "一字板", "offset": 0 },
+      { "field": "turnover", "op": ">=", "value": 5 },
+      { "field": "turnover", "op": "<=", "value": 15 },
+      { "field": "vol_ratio", "op": "<=", "value": 3 },
+      { "field": "pct_change_sum", "op": "<=", "value": 25, "lookback": 5 }
+    ]
+  }
+}

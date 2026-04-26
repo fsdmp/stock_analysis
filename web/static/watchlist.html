@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>自选股 - A股数据分析平台</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e; color: #e0e0e0;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  min-height: 100vh; display: flex; flex-direction: column;
+}
+
+/* Nav */
+.nav {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 24px; background: #16213e; border-bottom: 1px solid #0f3460;
+}
+.back-btn {
+  padding: 5px 12px; background: transparent; border: 1px solid #333;
+  border-radius: 6px; color: #888; font-size: 13px; cursor: pointer; transition: all .2s;
+}
+.back-btn:hover { border-color: #e94560; color: #e94560; }
+.nav-title { font-size: 16px; color: #e0e0e0; font-weight: 600; }
+
+/* Layout */
+.layout {
+  display: flex; flex: 1; overflow: hidden;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 200px; min-width: 200px; background: #16213e;
+  border-right: 1px solid #0f3460; display: flex; flex-direction: column;
+}
+.sidebar-header {
+  padding: 14px 16px; font-size: 13px; color: #888;
+  border-bottom: 1px solid #0f3460; display: flex;
+  justify-content: space-between; align-items: center;
+}
+.sidebar-header .add-btn {
+  background: none; border: 1px solid #2a2a4a; color: #888;
+  border-radius: 4px; padding: 2px 8px; font-size: 12px; cursor: pointer;
+  transition: all .2s;
+}
+.sidebar-header .add-btn:hover { border-color: #e94560; color: #e94560; }
+.group-list { flex: 1; overflow-y: auto; }
+.group-item {
+  padding: 10px 16px; cursor: pointer; font-size: 14px;
+  display: flex; justify-content: space-between; align-items: center;
+  transition: background .15s; border-left: 3px solid transparent;
+}
+.group-item:hover { background: rgba(255,255,255,.03); }
+.group-item.active {
+  background: rgba(233,69,96,.08); border-left-color: #e94560; color: #e94560;
+}
+.group-item .g-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.group-item .g-count {
+  font-size: 11px; color: #555; margin-left: 6px;
+  background: rgba(255,255,255,.04); padding: 1px 6px; border-radius: 8px;
+}
+.group-item .g-actions {
+  display: none; gap: 4px; margin-left: 4px;
+}
+.group-item:hover .g-actions { display: flex; }
+.group-item:hover .g-count { display: none; }
+.g-btn {
+  background: none; border: none; color: #555; font-size: 12px; cursor: pointer;
+  padding: 1px 3px; line-height: 1;
+}
+.g-btn:hover { color: #e94560; }
+
+/* New group inline input */
+.new-group-row {
+  padding: 6px 12px; display: none; border-top: 1px solid #0f3460;
+}
+.new-group-row.show { display: flex; align-items: center; gap: 6px; }
+.new-group-row input {
+  flex: 1; padding: 6px 10px; background: #1a1a2e; border: 1px solid #0f3460;
+  border-radius: 4px; color: #fff; font-size: 13px; outline: none;
+}
+.new-group-row input:focus { border-color: #e94560; }
+.new-group-row button {
+  padding: 6px 12px; background: #e94560; border: none; border-radius: 4px;
+  color: #fff; font-size: 12px; cursor: pointer;
+}
+
+/* Main content */
+.main-content {
+  flex: 1; overflow-y: auto; padding: 24px;
+}
+.content-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 16px;
+}
+.content-header h2 { font-size: 18px; color: #e0e0e0; }
+.stock-count { font-size: 13px; color: #555; }
+
+/* Search & Add */
+.add-area {
+  display: flex; gap: 10px; margin-bottom: 20px; position: relative;
+}
+.add-input {
+  flex: 1; max-width: 360px; padding: 10px 14px; background: #16213e;
+  border: 1px solid #0f3460; border-radius: 6px; color: #fff; font-size: 14px;
+  outline: none; transition: border-color .2s;
+}
+.add-input:focus { border-color: #e94560; }
+.add-input::placeholder { color: #444; }
+.search-dd {
+  position: absolute; top: 100%; left: 0; width: 360px;
+  max-height: 240px; overflow-y: auto; background: #16213e;
+  border: 1px solid #0f3460; border-radius: 6px; z-index: 20; display: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,.4);
+}
+.search-dd.show { display: block; }
+.dd-item {
+  padding: 8px 14px; cursor: pointer; font-size: 13px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.dd-item:hover { background: #0f3460; }
+.dd-item .dc { color: #3498db; }
+.dd-item .dn { color: #888; font-size: 12px; margin-left: 6px; }
+
+/* Stock table */
+.stock-table { width: 100%; border-collapse: collapse; }
+.stock-table th {
+  text-align: left; padding: 10px 14px; font-size: 12px; color: #555;
+  border-bottom: 1px solid #0f3460; font-weight: 400;
+}
+.stock-table td {
+  padding: 12px 14px; font-size: 14px; border-bottom: 1px solid rgba(15,52,96,.3);
+}
+.stock-table tr { transition: background .15s; }
+.stock-table tbody tr:hover { background: rgba(255,255,255,.02); }
+.stock-table .code-cell {
+  color: #3498db; cursor: pointer; text-decoration: none;
+}
+.stock-table .code-cell:hover { color: #5dade2; }
+.stock-table .name-cell { color: #e0e0e0; }
+.up { color: #e74c3c; }
+.down { color: #2ecc71; }
+
+/* Action buttons in table */
+.act-btns { display: flex; gap: 6px; }
+.act-btn {
+  padding: 4px 10px; border-radius: 4px; border: 1px solid #2a2a4a;
+  background: transparent; color: #888; font-size: 12px; cursor: pointer;
+  transition: all .15s; white-space: nowrap;
+}
+.act-btn:hover { border-color: #e94560; color: #e94560; }
+.act-btn.del:hover { border-color: #e74c3c; color: #e74c3c; }
+
+/* Move dropdown */
+.move-wrap { position: relative; display: inline-block; }
+.move-dd {
+  position: absolute; right: 0; top: 100%; width: 160px;
+  background: #16213e; border: 1px solid #0f3460; border-radius: 6px;
+  z-index: 30; display: none; box-shadow: 0 4px 12px rgba(0,0,0,.4);
+}
+.move-dd.show { display: block; }
+.move-dd-item {
+  padding: 8px 14px; cursor: pointer; font-size: 13px; color: #e0e0e0;
+  transition: background .15s;
+}
+.move-dd-item:hover { background: #0f3460; }
+.move-dd-item.disabled { color: #444; pointer-events: none; }
+
+/* Empty state */
+.empty {
+  text-align: center; padding: 80px 24px; color: #333;
+}
+.empty-icon { font-size: 42px; opacity: .35; margin-bottom: 12px; }
+.empty p { font-size: 13px; color: #555; }
+
+/* Rename modal */
+.rename-overlay {
+  display: none; position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,.6); justify-content: center; align-items: center;
+}
+.rename-overlay.active { display: flex; }
+.rename-box {
+  width: 360px; background: #16213e; border: 1px solid #0f3460;
+  border-radius: 10px; padding: 24px;
+}
+.rename-box h3 { font-size: 16px; margin-bottom: 16px; color: #e0e0e0; }
+.rename-box input {
+  width: 100%; padding: 10px 14px; background: #1a1a2e;
+  border: 1px solid #0f3460; border-radius: 6px; color: #fff;
+  font-size: 14px; outline: none; margin-bottom: 16px;
+}
+.rename-box input:focus { border-color: #e94560; }
+.rename-btns { display: flex; gap: 10px; justify-content: flex-end; }
+.rename-btns button {
+  padding: 8px 20px; border-radius: 6px; font-size: 13px; cursor: pointer;
+}
+.btn-cancel { background: transparent; border: 1px solid #2a2a4a; color: #888; }
+.btn-cancel:hover { border-color: #555; color: #ccc; }
+.btn-confirm { background: #e94560; border: none; color: #fff; }
+.btn-confirm:hover { background: #c73850; }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <button class="back-btn" onclick="location.href='/'">&#8592;</button>
+  <span class="nav-title">自选股</span>
+</div>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <span>分组</span>
+      <button class="add-btn" onclick="showNewGroup()">+ 新建</button>
+    </div>
+    <div class="group-list" id="groupList"></div>
+    <div class="new-group-row" id="newGroupRow">
+      <input id="newGroupInput" type="text" placeholder="分组名称" maxlength="20"
+        onkeydown="if(event.key==='Enter')createGroup()">
+      <button onclick="createGroup()">确定</button>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main-content">
+    <div class="content-header">
+      <h2 id="groupName">默认分组</h2>
+      <span class="stock-count" id="stockCount"></span>
+    </div>
+
+    <!-- Add stock -->
+    <div class="add-area">
+      <input class="add-input" id="addInput" type="text" placeholder="输入代码或名称搜索，添加到当前分组..." autocomplete="off">
+      <div class="search-dd" id="searchDd"></div>
+    </div>
+
+    <!-- Stock list -->
+    <div id="stockArea"></div>
+  </div>
+</div>
+
+<!-- Rename modal -->
+<div class="rename-overlay" id="renameModal">
+  <div class="rename-box">
+    <h3>重命名分组</h3>
+    <input id="renameInput" type="text" maxlength="20"
+      onkeydown="if(event.key==='Enter')confirmRename()">
+    <div class="rename-btns">
+      <button class="btn-cancel" onclick="closeRename()">取消</button>
+      <button class="btn-confirm" onclick="confirmRename()">确定</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let allGroups = [];
+let activeGroupId = 'default';
+let searchTimer;
+
+const addInput = document.getElementById('addInput');
+const searchDd = document.getElementById('searchDd');
+
+// Load watchlist data
+async function loadWatchlist() {
+  const resp = await fetch('/api/watchlist');
+  allGroups = await resp.json();
+  renderGroups();
+  renderStocks();
+}
+
+// Render group list
+function renderGroups() {
+  const el = document.getElementById('groupList');
+  el.innerHTML = allGroups.map(g => {
+    const active = g.id === activeGroupId ? ' active' : '';
+    const canEdit = g.id !== 'default';
+    return `<div class="group-item${active}" onclick="selectGroup('${g.id}')">
+      <span class="g-name">${esc(g.name)}</span>
+      <span class="g-count">${g.stocks.length}</span>
+      ${canEdit ? `<span class="g-actions">
+        <button class="g-btn" onclick="event.stopPropagation();openRename('${g.id}','${esc(g.name)}')" title="重命名">&#9998;</button>
+        <button class="g-btn" onclick="event.stopPropagation();deleteGroup('${g.id}')" title="删除">&#10005;</button>
+      </span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// Render stock table for active group
+function renderStocks() {
+  const group = allGroups.find(g => g.id === activeGroupId);
+  if (!group) return;
+
+  document.getElementById('groupName').textContent = group.name;
+  document.getElementById('stockCount').textContent = group.stocks.length ? `${group.stocks.length} 只` : '';
+
+  const area = document.getElementById('stockArea');
+  if (!group.stocks.length) {
+    area.innerHTML = '<div class="empty"><div class="empty-icon">&#9734;</div><p>当前分组暂无自选股</p></div>';
+    return;
+  }
+
+  let rows = group.stocks.map((s, i) => {
+    const cls = s.pct_change >= 0 ? 'up' : 'down';
+    const sign = s.pct_change >= 0 ? '+' : '';
+    const moveOptions = allGroups.filter(g => g.id !== activeGroupId).map(g =>
+      `<div class="move-dd-item" onclick="moveStock('${s.code}','${g.id}')">${esc(g.name)}</div>`
+    ).join('');
+    const moveDisabled = allGroups.length <= 1 ? ' disabled' : '';
+
+    return `<tr>
+      <td>${i + 1}</td>
+      <td><a class="code-cell" href="/stock/${s.code}" target="_blank">${s.code}</a></td>
+      <td class="name-cell">${esc(s.name)}</td>
+      <td>${s.close || '-'}</td>
+      <td class="${cls}">${sign}${(s.pct_change || 0).toFixed(2)}%</td>
+      <td>
+        <div class="act-btns">
+          <div class="move-wrap">
+            <button class="act-btn" onclick="toggleMoveDd(this)"${moveDisabled}>移动</button>
+            <div class="move-dd">${allGroups.length <= 1
+              ? '<div class="move-dd-item disabled">暂无其他分组</div>'
+              : allGroups.filter(g => g.id !== activeGroupId).map(g =>
+                  `<div class="move-dd-item" onclick="moveStock('${s.code}','${g.id}')">${esc(g.name)}</div>`
+                ).join('')
+            }</div>
+          </div>
+          <button class="act-btn del" onclick="removeStock('${s.code}')">移除</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  area.innerHTML = `<table class="stock-table">
+    <thead><tr><th>#</th><th>代码</th><th>名称</th><th>现价</th><th>涨跌幅</th><th>操作</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+// Select group
+function selectGroup(gid) {
+  activeGroupId = gid;
+  renderGroups();
+  renderStocks();
+}
+
+// New group
+function showNewGroup() {
+  const row = document.getElementById('newGroupRow');
+  row.classList.add('show');
+  document.getElementById('newGroupInput').value = '';
+  document.getElementById('newGroupInput').focus();
+}
+
+async function createGroup() {
+  const input = document.getElementById('newGroupInput');
+  const name = input.value.trim();
+  if (!name) return;
+  const resp = await fetch('/api/watchlist/group', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name}),
+  });
+  const data = await resp.json();
+  if (data.error) { alert(data.error); return; }
+  document.getElementById('newGroupRow').classList.remove('show');
+  await loadWatchlist();
+  activeGroupId = data.id;
+  renderGroups();
+  renderStocks();
+}
+
+// Delete group
+async function deleteGroup(gid) {
+  const g = allGroups.find(g => g.id === gid);
+  if (!g) return;
+  if (!confirm(`确认删除分组「${g.name}」？股票将移至默认分组。`)) return;
+  await fetch(`/api/watchlist/group/${gid}`, {method: 'DELETE'});
+  if (activeGroupId === gid) activeGroupId = 'default';
+  await loadWatchlist();
+}
+
+// Rename
+let _renameGid = '';
+function openRename(gid, name) {
+  _renameGid = gid;
+  document.getElementById('renameInput').value = name;
+  document.getElementById('renameModal').classList.add('active');
+  document.getElementById('renameInput').focus();
+}
+function closeRename() {
+  document.getElementById('renameModal').classList.remove('active');
+}
+async function confirmRename() {
+  const name = document.getElementById('renameInput').value.trim();
+  if (!name) return;
+  await fetch(`/api/watchlist/group/${_renameGid}`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name}),
+  });
+  closeRename();
+  await loadWatchlist();
+}
+
+// Add stock search
+addInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const q = addInput.value.trim();
+  if (!q) { searchDd.classList.remove('show'); return; }
+  searchTimer = setTimeout(() => searchStock(q), 200);
+});
+addInput.addEventListener('keydown', e => {
+  if (e.key === 'Escape') searchDd.classList.remove('show');
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('.add-area')) searchDd.classList.remove('show');
+});
+
+async function searchStock(q) {
+  const resp = await fetch(`/api/stocks?q=${encodeURIComponent(q)}&size=10`);
+  const data = (await resp.json()).data || [];
+  if (!data.length) {
+    searchDd.innerHTML = '<div class="dd-item" style="color:#444;pointer-events:none">无匹配结果</div>';
+    searchDd.classList.add('show');
+    return;
+  }
+  searchDd.innerHTML = data.map(s => {
+    const c = s.pct_change >= 0 ? 'color:#e74c3c' : 'color:#2ecc71';
+    const sg = s.pct_change >= 0 ? '+' : '';
+    return `<div class="dd-item" onclick="addStock('${s.code}')">
+      <span><span class="dc">${s.code}</span><span class="dn">${s.name||''}</span></span>
+      <span style="${c}">${sg}${s.pct_change.toFixed(2)}%</span>
+    </div>`;
+  }).join('');
+  searchDd.classList.add('show');
+}
+
+async function addStock(code) {
+  await fetch('/api/watchlist/stock', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({code, group_id: activeGroupId}),
+  });
+  addInput.value = '';
+  searchDd.classList.remove('show');
+  await loadWatchlist();
+}
+
+async function removeStock(code) {
+  await fetch('/api/watchlist/stock', {
+    method: 'DELETE',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({code, group_id: activeGroupId}),
+  });
+  await loadWatchlist();
+}
+
+async function moveStock(code, toGid) {
+  await fetch('/api/watchlist/move', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({code, from: activeGroupId, to: toGid}),
+  });
+  await loadWatchlist();
+}
+
+// Move dropdown toggle
+function toggleMoveDd(btn) {
+  const dd = btn.nextElementSibling;
+  // Close all others first
+  document.querySelectorAll('.move-dd.show').forEach(d => {
+    if (d !== dd) d.classList.remove('show');
+  });
+  dd.classList.toggle('show');
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.move-wrap')) {
+    document.querySelectorAll('.move-dd.show').forEach(d => d.classList.remove('show'));
+  }
+});
+
+// Utils
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Init
+loadWatchlist();
+</script>
+</body>
+</html>

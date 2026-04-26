@@ -1,0 +1,45 @@
+{
+  "name": "60涨停回踩均线",
+  "description": "60开头，非ST非跌停，收盘价站稳5日线，3天前涨停且7天内仅1次涨停",
+  "version": "2.0",
+  "tags": [],
+  "filter": {
+    "logic": "AND",
+    "rules": [
+      {
+        "field": "code_prefix",
+        "op": "in",
+        "value": [
+          "60"
+        ]
+      },
+      {
+        "field": "is_st",
+        "op": "=",
+        "value": false
+      },
+      {
+        "field": "is_limit_down",
+        "op": "=",
+        "value": false
+      },
+      {
+        "field": "is_limit_up",
+        "offset": 3,
+        "op": "=",
+        "value": true
+      },
+      {
+        "field": "close",
+        "op": ">",
+        "ref": "ma5"
+      },
+      {
+        "field": "limit_up_count",
+        "op": "=",
+        "value": 1,
+        "lookback": 7
+      }
+    ]
+  }
+}

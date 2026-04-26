@@ -1,0 +1,24 @@
+{
+  "name": "多头趋势放量突破",
+  "description": "均线多头排列，放量上涨突破，MACD零轴上方红柱放大，KDJ未超买",
+  "version": "2.0",
+  "tags": ["趋势突破", "多头", "放量"],
+  "filter": {
+    "logic": "AND",
+    "rules": [
+      { "field": "trading_status", "op": "contains", "value": "交易" },
+      { "field": "is_st", "op": "=", "value": false },
+      { "field": "ma_align", "op": "=", "value": "多头排列", "mas": ["ma5", "ma10", "ma20"] },
+      { "field": "vol_price", "op": "vol_price", "value": "放量上涨" },
+      { "field": "close", "op": "is_new_high", "lookback": 20 },
+      { "field": "macd_dif", "op": "in_zone", "value": "零轴上方" },
+      { "field": "macd_hist", "op": "in_zone", "value": "红柱放大" },
+      {
+        "logic": "NOT",
+        "rules": [
+          { "field": "kdj_k", "op": "in_zone", "value": "超买" }
+        ]
+      }
+    ]
+  }
+}

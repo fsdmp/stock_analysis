@@ -1,0 +1,14 @@
+{
+  "name": "双金叉共振",
+  "description": "正常交易状态，MACD和KDJ同时出现金叉",
+  "version": "2.0",
+  "tags": ["金叉共振", "技术指标", "中线"],
+  "filter": {
+    "logic": "AND",
+    "rules": [
+      { "field": "trading_status", "op": "contains", "value": "交易" },
+      { "field": "macd_dif", "op": "cross_above", "ref": "macd_dea" },
+      { "field": "kdj_k", "op": "cross_above", "ref": "kdj_d" }
+    ]
+  }
+}
