@@ -64,6 +64,11 @@ _strategy_scan_status = {
     "current": 0, "total": 0, "code": "",
     "results": [], "strategy_name": "",
 }
+_backtest_status = {
+    "running": False, "done": False, "message": "",
+    "current": 0, "total": 0,
+    "trades": [], "report": None,
+}
 
 
 def build_stock_names(use_cache=True):
@@ -1210,6 +1215,376 @@ def api_strategy_scan_status():
 @login_required
 def page_strategy():
     return send_from_directory("static", "strategy.html")
+
+
+# ---------------------------------------------------------------------------
+# Backtest
+# ---------------------------------------------------------------------------
+
+_BACKTEST_ACTION_SCORE_MAP = {
+    "强烈买入": 78, "建议买入": 63, "偏多观望": 50,
+    "观望": 40, "建议卖出": 25, "强烈卖出": 0,
+}
+
+
+def _check_condition(cond_type, cond_op, cond_value, score, action):
+    """Check if a buy/sell condition is met."""
+    if cond_type == "score":
+        if cond_op == ">=":
+            return score >= cond_value
+        elif cond_op == ">":
+            return score > cond_value
+        elif cond_op == "<=":
+            return score <= cond_value
+        elif cond_op == "<":
+            return score < cond_value
+        elif cond_op == "=":
+            return score == cond_value
+    elif cond_type == "action":
+        return action == cond_value
+    return False
+
+
+def _backtest_single_stock(code, date_start, date_end,
+                           buy_cond, sell_cond,
+                           buy_price_type, sell_price_type,
+                           price_min, price_max,
+                           max_hold_days):
+    """Run backtest on a single stock. Returns list of trade dicts or None."""
+    from stock_data.scoring import calc_score
+
+    path = DATA_DIR / f"{code}.parquet"
+    if not path.exists():
+        return None
+
+    df = pd.read_parquet(path)
+    df["date"] = pd.to_datetime(df["date"])
+
+    mask = (df["date"] >= date_start) & (df["date"] <= date_end)
+    df_range = df[mask].reset_index(drop=True)
+    if len(df_range) < 3:
+        return None
+
+    # Need enough history before date_start to compute scores
+    start_idx_in_full = df.index[df["date"] >= date_start][0]
+    if start_idx_in_full < 30:
+        return None  # not enough historical data for indicator warm-up
+
+    trade_dates = df_range["date"].tolist()
+    n_trade = len(trade_dates)
+
+    trades = []
+    holding = False
+    buy_price = 0
+    buy_date = None
+
+    WINDOW_SIZE = 150
+    START_OFFSET = 30
+
+    for t in range(n_trade):
+        full_idx = start_idx_in_full + t
+        if full_idx < START_OFFSET:
+            continue
+
+        win_start = max(0, full_idx - WINDOW_SIZE + 1)
+        df_win = df.iloc[win_start:full_idx + 1].copy()
+        if len(df_win) < START_OFFSET:
+            continue
+
+        try:
+            result = calc_score(df_win)
+            score = result["total"]
+            action = result.get("action", "")
+        except Exception:
+            continue
+
+        current_date = trade_dates[t]
+        current_close = float(df_range.iloc[t]["close"])
+
+        # Price range filter for buy
+        if not holding and price_min is not None and current_close < price_min:
+            continue
+        if not holding and price_max is not None and current_close > price_max:
+            continue
+
+        # T+1 execution
+        if t + 1 >= n_trade:
+            if holding:
+                sell_price = current_close
+                sell_date = current_date
+                hold_days = (sell_date - buy_date).days
+                ret = (sell_price - buy_price) / buy_price * 100
+                trades.append({
+                    "code": code,
+                    "buy_date": str(buy_date.date()) if hasattr(buy_date, 'date') else str(buy_date),
+                    "buy_price": round(buy_price, 4),
+                    "sell_date": str(sell_date.date()) if hasattr(sell_date, 'date') else str(sell_date),
+                    "sell_price": round(sell_price, 4),
+                    "hold_days": hold_days,
+                    "return_pct": round(ret, 2),
+                    "exit_reason": "end_of_data",
+                })
+                holding = False
+            break
+
+        next_row = df_range.iloc[t + 1]
+
+        if not holding:
+            # Check buy condition
+            if buy_cond:
+                bc_type = buy_cond.get("type", "score")
+                bc_op = buy_cond.get("op", ">=")
+                bc_val = buy_cond.get("value", 90)
+                if _check_condition(bc_type, bc_op, bc_val, score, action):
+                    buy_price = float(next_row["close" if buy_price_type == "close" else "open"])
+                    buy_date = trade_dates[t + 1]
+                    holding = True
+        else:
+            # Max hold days: force sell if exceeded
+            if max_hold_days and max_hold_days > 0:
+                days_held = (current_date - buy_date).days
+                if days_held >= max_hold_days:
+                    sell_price = float(next_row["close" if sell_price_type == "close" else "open"])
+                    sell_date = trade_dates[t + 1]
+                    hold_days = (sell_date - buy_date).days
+                    ret = (sell_price - buy_price) / buy_price * 100
+                    trades.append({
+                        "code": code,
+                        "buy_date": str(buy_date.date()) if hasattr(buy_date, 'date') else str(buy_date),
+                        "buy_price": round(buy_price, 4),
+                        "sell_date": str(sell_date.date()) if hasattr(sell_date, 'date') else str(sell_date),
+                        "sell_price": round(sell_price, 4),
+                        "hold_days": hold_days,
+                        "return_pct": round(ret, 2),
+                        "exit_reason": "max_hold",
+                    })
+                    holding = False
+                    continue
+
+            # Check sell condition
+            if sell_cond:
+                sc_type = sell_cond.get("type", "score")
+                sc_op = sell_cond.get("op", "<")
+                sc_val = sell_cond.get("value", 30)
+                if _check_condition(sc_type, sc_op, sc_val, score, action):
+                    sell_price = float(next_row["close" if sell_price_type == "close" else "open"])
+                    sell_date = trade_dates[t + 1]
+                    hold_days = (sell_date - buy_date).days
+                    ret = (sell_price - buy_price) / buy_price * 100
+                    trades.append({
+                        "code": code,
+                        "buy_date": str(buy_date.date()) if hasattr(buy_date, 'date') else str(buy_date),
+                        "buy_price": round(buy_price, 4),
+                        "sell_date": str(sell_date.date()) if hasattr(sell_date, 'date') else str(sell_date),
+                        "sell_price": round(sell_price, 4),
+                        "hold_days": hold_days,
+                        "return_pct": round(ret, 2),
+                        "exit_reason": "signal",
+                    })
+                    holding = False
+
+    # Close remaining position
+    if holding and n_trade > 0:
+        sell_price = float(df_range.iloc[-1]["close"])
+        sell_date = trade_dates[-1]
+        hold_days = (sell_date - buy_date).days
+        ret = (sell_price - buy_price) / buy_price * 100
+        trades.append({
+            "code": code,
+            "buy_date": str(buy_date.date()) if hasattr(buy_date, 'date') else str(buy_date),
+            "buy_price": round(buy_price, 4),
+            "sell_date": str(sell_date.date()) if hasattr(sell_date, 'date') else str(sell_date),
+            "sell_price": round(sell_price, 4),
+            "hold_days": hold_days,
+            "return_pct": round(ret, 2),
+            "exit_reason": "end_of_data",
+        })
+
+    return trades if trades else None
+
+
+def _build_backtest_report(all_trades, n_stocks, elapsed):
+    """Build backtest statistics report."""
+    if not all_trades:
+        return {"summary": "无交易记录", "total_trades": 0}
+
+    df = pd.DataFrame(all_trades)
+    total_trades = len(df)
+    win_trades = len(df[df["return_pct"] > 0])
+    loss_trades = len(df[df["return_pct"] <= 0])
+    win_rate = win_trades / total_trades * 100 if total_trades > 0 else 0
+    avg_return = df["return_pct"].mean()
+    median_return = df["return_pct"].median()
+    avg_hold = df["hold_days"].mean()
+    median_hold = df["hold_days"].median()
+    compound = (1 + df["return_pct"] / 100).prod() - 1
+
+    avg_win = df[df["return_pct"] > 0]["return_pct"].mean() if win_trades > 0 else 0
+    avg_loss = abs(df[df["return_pct"] <= 0]["return_pct"].mean()) if loss_trades > 0 else 0
+    profit_loss_ratio = avg_win / avg_loss if avg_loss > 0 else float('inf')
+
+    # Distribution
+    bins = [(-999, -10), (-10, -5), (-5, -3), (-3, 0), (0, 3), (3, 5), (5, 10), (10, 999)]
+    labels = ["<-10%", "-10~-5%", "-5~-3%", "-3~0%", "0~3%", "3~5%", "5~10%", ">10%"]
+    distribution = []
+    for (lo, hi), label in zip(bins, labels):
+        count = len(df[(df["return_pct"] >= lo) & (df["return_pct"] < hi)])
+        distribution.append({"label": label, "count": count, "pct": round(count / total_trades * 100, 1)})
+
+    # Hold days distribution
+    hold_bins = [(0, 3), (3, 7), (7, 14), (14, 30), (30, 60), (60, 999)]
+    hold_labels = ["1-3天", "4-7天", "8-14天", "15-30天", "31-60天", ">60天"]
+    hold_distribution = []
+    for (lo, hi), label in zip(hold_bins, hold_labels):
+        subset = df[(df["hold_days"] > lo) & (df["hold_days"] <= hi)]
+        count = len(subset)
+        avg_r = round(subset["return_pct"].mean(), 2) if count > 0 else 0
+        wr = round(len(subset[subset["return_pct"] > 0]) / count * 100, 1) if count > 0 else 0
+        hold_distribution.append({"label": label, "count": count, "avg_return": avg_r, "win_rate": wr})
+
+    # Monthly stats
+    df["sell_month"] = pd.to_datetime(df["sell_date"]).dt.to_period("M").astype(str)
+    monthly = df.groupby("sell_month").agg(
+        trades=("return_pct", "count"),
+        avg_return=("return_pct", "mean"),
+        total_return=("return_pct", "sum"),
+    ).reset_index()
+    monthly_list = []
+    for _, row in monthly.iterrows():
+        monthly_list.append({
+            "month": row["sell_month"],
+            "trades": int(row["trades"]),
+            "avg_return": round(row["avg_return"], 2),
+            "total_return": round(row["total_return"], 1),
+        })
+
+    # Top/bottom trades
+    top5 = df.nlargest(5, "return_pct")[["code", "buy_date", "sell_date", "hold_days", "return_pct"]].to_dict("records")
+    bot5 = df.nsmallest(5, "return_pct")[["code", "buy_date", "sell_date", "hold_days", "return_pct"]].to_dict("records")
+
+    return {
+        "total_trades": total_trades,
+        "win_trades": win_trades,
+        "loss_trades": loss_trades,
+        "win_rate": round(win_rate, 1),
+        "avg_return": round(avg_return, 2),
+        "median_return": round(median_return, 2),
+        "avg_hold_days": round(avg_hold, 1),
+        "median_hold_days": round(median_hold, 1),
+        "compound_return": round(compound * 100, 2),
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(avg_loss, 2),
+        "profit_loss_ratio": round(profit_loss_ratio, 2),
+        "distribution": distribution,
+        "hold_distribution": hold_distribution,
+        "monthly": monthly_list,
+        "top5": top5,
+        "bottom5": bot5,
+        "n_stocks": n_stocks,
+        "elapsed": round(elapsed, 1),
+    }
+
+
+@app.route("/api/backtest", methods=["POST"])
+@login_required
+def api_backtest():
+    """Start backtest in background thread."""
+    if _backtest_status["running"]:
+        return jsonify({"status": "already_running", "message": "回测正在进行中"})
+
+    data = request.get_json(silent=True) or {}
+    date_start = data.get("date_start", "2025-01-01")
+    date_end = data.get("date_end", "2026-04-27")
+    price_min = data.get("price_min")
+    price_max = data.get("price_max")
+    buy_cond = data.get("buy_condition")  # e.g. {"type":"score","op":">=","value":90} or {"type":"action","value":"强烈买入"} or null
+    sell_cond = data.get("sell_condition")  # e.g. {"type":"score","op":"<","value":30} or null
+    buy_price_type = data.get("buy_price", "open")
+    sell_price_type = data.get("sell_price", "open")
+    sample_size = data.get("sample_size", 200)
+    max_hold_days = data.get("max_hold_days")  # e.g. 10, null=unlimited
+
+    if price_min is not None:
+        price_min = float(price_min)
+    if price_max is not None:
+        price_max = float(price_max)
+    if max_hold_days is not None:
+        max_hold_days = int(max_hold_days)
+
+    print(f"[backtest] params: date={date_start}~{date_end}, buy={buy_cond}, sell={sell_cond}, "
+          f"buy_price={buy_price_type}, sell_price={sell_price_type}, "
+          f"price={price_min}~{price_max}, sample={sample_size}, max_hold={max_hold_days}")
+
+    def run_backtest():
+        import time
+        import traceback
+
+        _backtest_status.update({
+            "running": True, "done": False, "message": "正在回测...",
+            "current": 0, "total": 0,
+            "trades": [], "report": None,
+        })
+
+        files = sorted(DATA_DIR.glob("*.parquet"))
+        codes = [f.stem for f in files]
+
+        if sample_size and len(codes) > sample_size:
+            np.random.seed(42)
+            codes = list(np.random.choice(codes, min(sample_size, len(codes)), replace=False))
+
+        _backtest_status["total"] = len(codes)
+        t0 = time.time()
+        all_trades = []
+        error_count = 0
+
+        for i, code in enumerate(codes):
+            _backtest_status["current"] = i + 1
+            _backtest_status["message"] = f"回测中 {i+1}/{len(codes)} - {code}"
+            try:
+                result = _backtest_single_stock(
+                    code, date_start, date_end,
+                    buy_cond, sell_cond,
+                    buy_price_type, sell_price_type,
+                    price_min, price_max,
+                    max_hold_days,
+                )
+                if result:
+                    all_trades.extend(result)
+            except Exception as e:
+                error_count += 1
+                if error_count <= 3:
+                    traceback.print_exc()
+
+        elapsed = time.time() - t0
+        report = _build_backtest_report(all_trades, len(codes), elapsed)
+
+        _backtest_status.update({
+            "running": False,
+            "done": True,
+            "message": f"回测完成，共 {len(all_trades)} 笔交易" + (f"（{error_count}只出错）" if error_count else ""),
+            "trades": all_trades,
+            "report": report,
+        })
+        print(f"[backtest] finished: {len(all_trades)} trades, {len(codes)} stocks, {elapsed:.1f}s, report={report is not None}")
+
+    t = threading.Thread(target=run_backtest, daemon=True)
+    t.start()
+    return jsonify({"status": "started", "message": "回测已启动"})
+
+
+@app.route("/api/backtest/status")
+@login_required
+def api_backtest_status():
+    """Check backtest progress and get results."""
+    return jsonify({
+        "running": _backtest_status["running"],
+        "done": _backtest_status["done"],
+        "message": _backtest_status["message"],
+        "current": _backtest_status["current"],
+        "total": _backtest_status["total"],
+        "trades": _backtest_status["trades"],
+        "report": _backtest_status["report"],
+    })
 
 
 @app.route("/api/strategy/save", methods=["POST"])

@@ -143,6 +143,23 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
 .ov-prog { width: 260px; height: 6px; background: #0f3460; border-radius: 3px; overflow: hidden; margin-top: 12px; }
 .ov-prog > div { height: 100%; background: #e94560; border-radius: 3px; transition: width .3s; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Backtest report */
+.bt-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.bt-card { background: #1a1a2e; border: 1px solid #0f3460; border-radius: 8px; padding: 14px; text-align: center; }
+.bt-card-val { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+.bt-card-label { font-size: 11px; color: #666; }
+.bt-section { margin-bottom: 16px; }
+.bt-section-title { font-size: 13px; font-weight: 600; color: #888; margin-bottom: 8px; border-bottom: 1px solid #0f3460; padding-bottom: 4px; }
+.bt-bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; }
+.bt-bar-label { width: 70px; text-align: right; color: #888; flex-shrink: 0; }
+.bt-bar { flex: 1; height: 16px; background: #0f3460; border-radius: 3px; overflow: hidden; }
+.bt-bar > div { height: 100%; border-radius: 3px; transition: width .3s; }
+.bt-bar-count { width: 40px; color: #aaa; font-size: 11px; flex-shrink: 0; }
+.bt-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.bt-table th { text-align: left; color: #555; padding: 6px 8px; border-bottom: 1px solid #0f3460; font-weight: 500; }
+.bt-table td { padding: 6px 8px; border-bottom: 1px solid rgba(15,52,96,.3); }
+.bt-table tr:hover td { background: rgba(15,52,96,.3); }
 </style>
 </head>
 <body>
@@ -184,6 +201,7 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
       </div>
       <div class="content-actions">
         <button class="s-btn primary" id="btnRefresh" onclick="refreshScan(currentFile)">刷新数据</button>
+        <button class="s-btn" onclick="openBacktest()" style="background:#0f3460;border-color:#0f3460;color:#e0e0e0">回测</button>
         <button class="s-btn" id="btnWatchlist" onclick="batchAddWatchlist()" style="display:none">&#9734; 加入自选</button>
         <button class="s-btn" id="btnEdit" onclick="editStrategy(currentFile)">编辑</button>
         <button class="s-btn danger" id="btnDelete" onclick="deleteStrategy(currentFile, currentName)">删除</button>
@@ -225,6 +243,106 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
       <button class="ed-save" onclick="saveStrategy()">保存策略</button>
       <button class="ed-cancel" onclick="closeEditor()">取消</button>
     </div>
+  </div>
+</div>
+
+<!-- Backtest overlay -->
+<div class="editor-overlay" id="backtestOverlay">
+  <div class="editor" style="width:560px">
+    <div class="editor-title">
+      <span>策略回测</span>
+      <button class="cond-del" onclick="closeBacktest()" style="width:auto;font-size:20px">&times;</button>
+    </div>
+    <div class="ed-row">
+      <span class="ed-label">起始日期</span>
+      <input class="ed-input" id="btDateStart" type="date" value="2025-01-01">
+    </div>
+    <div class="ed-row">
+      <span class="ed-label">结束日期</span>
+      <input class="ed-input" id="btDateEnd" type="date" value="2026-04-27">
+    </div>
+    <div class="ed-row">
+      <span class="ed-label">价格区间</span>
+      <input class="param-sm" id="btPriceMin" type="number" placeholder="最低" style="width:80px">
+      <span style="color:#555">~</span>
+      <input class="param-sm" id="btPriceMax" type="number" placeholder="最高" style="width:80px">
+      <span style="color:#555;font-size:11px">元（可选）</span>
+    </div>
+    <div style="border-top:1px solid #0f3460;margin:12px 0;padding-top:12px">
+      <div style="font-size:12px;color:#888;margin-bottom:8px">买入条件（T日信号 → T+1日执行）</div>
+      <div class="ed-row">
+        <span class="ed-label">条件类型</span>
+        <select class="add-sel" id="btBuyType" onchange="onBuyTypeChange()">
+          <option value="">不限制</option>
+          <option value="score" selected>评分</option>
+          <option value="action">信号等级</option>
+        </select>
+        <span id="btBuyParam">
+          <select class="param-sm" id="btBuyOp" style="width:48px">
+            <option value=">=" selected>≥</option><option value=">">&gt;</option>
+            <option value="<=">≤</option><option value="<">&lt;</option>
+          </select>
+          <input class="param-sm" id="btBuyVal" type="number" value="90" style="width:60px">
+        </span>
+      </div>
+      <div class="ed-row">
+        <span class="ed-label">买入价格</span>
+        <div class="param-check">
+          <span class="p-chip on" data-v="open" onclick="toggleBtChip(this,'btBuyPrice')">次日开盘价</span>
+          <span class="p-chip" data-v="close" onclick="toggleBtChip(this,'btBuyPrice')">次日收盘价</span>
+        </div>
+      </div>
+    </div>
+    <div style="border-top:1px solid #0f3460;margin:12px 0;padding-top:12px">
+      <div style="font-size:12px;color:#888;margin-bottom:8px">卖出条件（T日信号 → T+1日执行）</div>
+      <div class="ed-row">
+        <span class="ed-label">条件类型</span>
+        <select class="add-sel" id="btSellType" onchange="onSellTypeChange()">
+          <option value="">不限制</option>
+          <option value="score" selected>评分</option>
+          <option value="action">信号等级</option>
+        </select>
+        <span id="btSellParam">
+          <select class="param-sm" id="btSellOp" style="width:48px">
+            <option value="<" selected>&lt;</option><option value="<=">≤</option>
+            <option value=">=">≥</option><option value=">">&gt;</option>
+          </select>
+          <input class="param-sm" id="btSellVal" type="number" value="30" style="width:60px">
+        </span>
+      </div>
+      <div class="ed-row">
+        <span class="ed-label">卖出价格</span>
+        <div class="param-check">
+          <span class="p-chip on" data-v="open" onclick="toggleBtChip(this,'btSellPrice')">次日开盘价</span>
+          <span class="p-chip" data-v="close" onclick="toggleBtChip(this,'btSellPrice')">次日收盘价</span>
+        </div>
+      </div>
+    </div>
+    <div class="ed-row">
+      <span class="ed-label">抽样数量</span>
+      <input class="param-sm" id="btSample" type="number" value="200" style="width:72px">
+      <span style="color:#555;font-size:11px">只（0=全部，较大值耗时长）</span>
+    </div>
+    <div class="ed-row">
+      <span class="ed-label">最长持股</span>
+      <input class="param-sm" id="btMaxHold" type="number" placeholder="不限" style="width:72px">
+      <span style="color:#555;font-size:11px">天（留空=不限，到期强制卖出）</span>
+    </div>
+    <div class="ed-actions">
+      <button class="ed-save" onclick="startBacktest()">开始回测</button>
+      <button class="ed-cancel" onclick="closeBacktest()">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- Backtest result overlay -->
+<div class="editor-overlay" id="btResultOverlay">
+  <div class="editor" style="width:720px;max-height:85vh;overflow-y:auto">
+    <div class="editor-title">
+      <span>回测报告</span>
+      <button class="cond-del" onclick="closeBtResult()" style="width:auto;font-size:20px">&times;</button>
+    </div>
+    <div id="btReportContent"></div>
   </div>
 </div>
 
@@ -1168,6 +1286,202 @@ async function batchAddWatchlist() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ===== Backtest =====
+let _btBuyPrice = 'open';
+let _btSellPrice = 'open';
+
+function toggleBtChip(el, field) {
+  const parent = el.parentElement;
+  parent.querySelectorAll('.p-chip').forEach(c => c.classList.remove('on'));
+  el.classList.add('on');
+  if (field === 'btBuyPrice') _btBuyPrice = el.dataset.v;
+  else _btSellPrice = el.dataset.v;
+}
+
+function onBuyTypeChange() {
+  const type = document.getElementById('btBuyType').value;
+  const param = document.getElementById('btBuyParam');
+  if (!type) { param.innerHTML = ''; return; }
+  if (type === 'score') {
+    param.innerHTML = `<select class="param-sm" id="btBuyOp" style="width:48px">
+      <option value=">=" selected>≥</option><option value=">">&gt;</option>
+      <option value="<=">≤</option><option value="<">&lt;</option></select>
+      <input class="param-sm" id="btBuyVal" type="number" value="90" style="width:60px">`;
+  } else {
+    param.innerHTML = `<select class="param-sm" id="btBuyAction" style="width:100px">
+      <option value="强烈买入">强烈买入</option><option value="建议买入">建议买入</option>
+      <option value="偏多观望">偏多观望</option></select>`;
+  }
+}
+
+function onSellTypeChange() {
+  const type = document.getElementById('btSellType').value;
+  const param = document.getElementById('btSellParam');
+  if (!type) { param.innerHTML = ''; return; }
+  if (type === 'score') {
+    param.innerHTML = `<select class="param-sm" id="btSellOp" style="width:48px">
+      <option value="<" selected>&lt;</option><option value="<=">≤</option>
+      <option value=">=">≥</option><option value=">">&gt;</option></select>
+      <input class="param-sm" id="btSellVal" type="number" value="30" style="width:60px">`;
+  } else {
+    param.innerHTML = `<select class="param-sm" id="btSellAction" style="width:100px">
+      <option value="强烈卖出">强烈卖出</option><option value="建议卖出">建议卖出</option>
+      <option value="观望">观望</option></select>`;
+  }
+}
+
+function openBacktest() {
+  document.getElementById('backtestOverlay').classList.add('active');
+}
+
+function closeBacktest() {
+  document.getElementById('backtestOverlay').classList.remove('active');
+}
+
+function _getBuyCond() {
+  const type = document.getElementById('btBuyType').value;
+  if (!type) return null;
+  if (type === 'score') {
+    const op = document.getElementById('btBuyOp')?.value || '>=';
+    const val = parseFloat(document.getElementById('btBuyVal')?.value);
+    if (isNaN(val)) return null;
+    return { type: 'score', op, value: val };
+  } else {
+    const val = document.getElementById('btBuyAction')?.value;
+    if (!val) return null;
+    return { type: 'action', value: val };
+  }
+}
+
+function _getSellCond() {
+  const type = document.getElementById('btSellType').value;
+  if (!type) return null;
+  if (type === 'score') {
+    const op = document.getElementById('btSellOp')?.value || '<';
+    const val = parseFloat(document.getElementById('btSellVal')?.value);
+    if (isNaN(val)) return null;
+    return { type: 'score', op, value: val };
+  } else {
+    const val = document.getElementById('btSellAction')?.value;
+    if (!val) return null;
+    return { type: 'action', value: val };
+  }
+}
+
+async function startBacktest() {
+  const buyCond = _getBuyCond();
+  const sellCond = _getSellCond();
+  if (!buyCond && !sellCond) { alert('请至少设置一个买入或卖出条件'); return; }
+
+  closeBacktest();
+  const ov = document.getElementById('overlay');
+  ov.classList.add('active');
+  document.getElementById('ovText').textContent = '正在回测...';
+  document.getElementById('ovSub').textContent = '';
+  document.getElementById('ovBar').style.width = '0';
+
+  const params = {
+    date_start: document.getElementById('btDateStart').value,
+    date_end: document.getElementById('btDateEnd').value,
+    buy_condition: buyCond,
+    sell_condition: sellCond,
+    buy_price: _btBuyPrice,
+    sell_price: _btSellPrice,
+    sample_size: parseInt(document.getElementById('btSample').value) || 200,
+  };
+  const priceMin = document.getElementById('btPriceMin').value;
+  const priceMax = document.getElementById('btPriceMax').value;
+  const maxHold = document.getElementById('btMaxHold').value;
+  if (priceMin) params.price_min = parseFloat(priceMin);
+  if (priceMax) params.price_max = parseFloat(priceMax);
+  if (maxHold) params.max_hold_days = parseInt(maxHold);
+
+  try {
+    await fetch('/api/backtest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+  } catch(e) { alert('启动回测失败: ' + e.message); ov.classList.remove('active'); return; }
+
+  const timer = setInterval(async () => {
+    try {
+      const resp = await fetch('/api/backtest/status');
+      const d = await resp.json();
+      const pct = d.total > 0 ? (d.current / d.total * 100).toFixed(0) : 0;
+      document.getElementById('ovSub').textContent = `${d.current} / ${d.total}`;
+      document.getElementById('ovBar').style.width = pct + '%';
+      document.getElementById('ovText').textContent = d.message || '回测中...';
+      if (!d.running && d.done) {
+        clearInterval(timer);
+        ov.classList.remove('active');
+        console.log('[backtest] done, trades:', d.trades?.length, 'report:', d.report);
+        if (d.report) showBtReport(d.report);
+        else alert('回测完成，无结果');
+      }
+    } catch(e) { console.error('[backtest] poll error:', e); }
+  }, 1000);
+}
+
+function showBtReport(r) {
+  const el = document.getElementById('btReportContent');
+  if (!r || !r.total_trades) {
+    el.innerHTML = '<div style="text-align:center;color:#555;padding:40px">无交易记录</div>';
+    document.getElementById('btResultOverlay').classList.add('active');
+    return;
+  }
+
+  const wrColor = r.win_rate >= 50 ? '#e74c3c' : '#2ecc71';
+  const retColor = r.avg_return >= 0 ? '#e74c3c' : '#2ecc71';
+  const maxBar = Math.max(...(r.distribution||[]).map(d=>d.count), 1);
+
+  el.innerHTML = `
+    <div class="bt-summary">
+      <div class="bt-card"><div class="bt-card-val">${r.total_trades}</div><div class="bt-card-label">总交易次数</div></div>
+      <div class="bt-card"><div class="bt-card-val" style="color:${wrColor}">${r.win_rate}%</div><div class="bt-card-label">胜率 (${r.win_trades}胜${r.loss_trades}负)</div></div>
+      <div class="bt-card"><div class="bt-card-val" style="color:${retColor}">${r.avg_return > 0 ? '+' : ''}${r.avg_return}%</div><div class="bt-card-label">平均收益</div></div>
+      <div class="bt-card"><div class="bt-card-val">${r.profit_loss_ratio}</div><div class="bt-card-label">盈亏比 (均盈/均亏)</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+      <div class="bt-card"><div class="bt-card-val" style="font-size:16px;color:#888">${r.avg_win > 0 ? '+' : ''}${r.avg_win}% / -${r.avg_loss}%</div><div class="bt-card-label">平均盈利 / 平均亏损</div></div>
+      <div class="bt-card"><div class="bt-card-val" style="font-size:16px;color:#888">${r.avg_hold_days}天</div><div class="bt-card-label">平均持仓天数 | 复合收益 ${r.compound_return}%</div></div>
+    </div>
+    <div class="bt-section">
+      <div class="bt-section-title">收益分布</div>
+      ${(r.distribution||[]).map(d => {
+        const pct = d.count / maxBar * 100;
+        const color = d.label.includes('-') ? '#e74c3c' : d.label.includes('0') ? '#f39c12' : '#2ecc71';
+        return `<div class="bt-bar-row"><span class="bt-bar-label">${d.label}</span><div class="bt-bar"><div style="width:${pct}%;background:${color}"></div></div><span class="bt-bar-count">${d.count} (${d.pct}%)</span></div>`;
+      }).join('')}
+    </div>
+    <div class="bt-section">
+      <div class="bt-section-title">持仓天数分布</div>
+      <table class="bt-table"><thead><tr><th>天数</th><th>交易数</th><th>平均收益</th><th>胜率</th></tr></thead>
+      <tbody>${(r.hold_distribution||[]).map(d => `<tr><td>${d.label}</td><td>${d.count}</td><td style="color:${d.avg_return>=0?'#e74c3c':'#2ecc71'}">${d.avg_return>0?'+':''}${d.avg_return}%</td><td>${d.win_rate}%</td></tr>`).join('')}</tbody></table>
+    </div>
+    ${r.monthly && r.monthly.length ? `<div class="bt-section"><div class="bt-section-title">按月统计</div>
+      <table class="bt-table"><thead><tr><th>月份</th><th>交易数</th><th>平均收益</th><th>累计收益</th></tr></thead>
+      <tbody>${r.monthly.map(m => `<tr><td>${m.month}</td><td>${m.trades}</td><td style="color:${m.avg_return>=0?'#e74c3c':'#2ecc71'}">${m.avg_return>0?'+':''}${m.avg_return}%</td><td style="color:${m.total_return>=0?'#e74c3c':'#2ecc71'}">${m.total_return>0?'+':''}${m.total_return}%</td></tr>`).join('')}</tbody></table>
+    </div>` : ''}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="bt-section"><div class="bt-section-title">最佳交易 Top 5</div>
+        <table class="bt-table"><thead><tr><th>代码</th><th>买入</th><th>卖出</th><th>天数</th><th>收益</th></tr></thead>
+        <tbody>${(r.top5||[]).map(t => `<tr><td style="color:#3498db">${t.code}</td><td>${t.buy_date}</td><td>${t.sell_date}</td><td>${t.hold_days}</td><td class="up">+${t.return_pct}%</td></tr>`).join('')}</tbody></table>
+      </div>
+      <div class="bt-section"><div class="bt-section-title">最差交易 Top 5</div>
+        <table class="bt-table"><thead><tr><th>代码</th><th>买入</th><th>卖出</th><th>天数</th><th>收益</th></tr></thead>
+        <tbody>${(r.bottom5||[]).map(t => `<tr><td style="color:#3498db">${t.code}</td><td>${t.buy_date}</td><td>${t.sell_date}</td><td>${t.hold_days}</td><td class="down">${t.return_pct}%</td></tr>`).join('')}</tbody></table>
+      </div>
+    </div>
+    <div style="text-align:center;font-size:11px;color:#444;margin-top:12px">回测 ${r.n_stocks} 只股票，耗时 ${r.elapsed}s</div>
+  `;
+  document.getElementById('btResultOverlay').classList.add('active');
+}
+
+function closeBtResult() {
+  document.getElementById('btResultOverlay').classList.remove('active');
 }
 </script>
 </body>
