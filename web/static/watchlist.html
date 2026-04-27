@@ -142,6 +142,16 @@ body {
 .up { color: #e74c3c; }
 .down { color: #2ecc71; }
 
+/* Score */
+.score-cell { font-weight: 700; font-size: 15px; }
+.score-high { color: #e74c3c; text-shadow: 0 0 8px rgba(231,76,60,.25); }
+.score-mid { color: #f39c12; text-shadow: 0 0 8px rgba(243,156,18,.25); }
+.score-low { color: #2ecc71; text-shadow: 0 0 8px rgba(46,204,113,.25); }
+.score-action { font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 600; }
+.sa-h { background: rgba(231,76,60,.12); color: #e74c3c; }
+.sa-m { background: rgba(243,156,18,.12); color: #f39c12; }
+.sa-l { background: rgba(46,204,113,.12); color: #2ecc71; }
+
 /* Action buttons in table */
 .act-btns { display: flex; gap: 6px; }
 .act-btn {
@@ -287,6 +297,36 @@ function renderGroups() {
   }).join('');
 }
 
+// Score cache: code -> { total, action }
+let _scoreCache = {};
+
+async function fetchScores(codes) {
+  if (!codes.length) return;
+  try {
+    const resp = await fetch('/api/batch-score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(codes),
+    });
+    const results = await resp.json();
+    results.forEach(r => {
+      if (!r.error) {
+        _scoreCache[r.code] = { total: r.total, action: r.action || '' };
+      }
+    });
+  } catch (e) {
+    console.error('Failed to fetch scores:', e);
+  }
+}
+
+function scoreCell(code) {
+  const sc = _scoreCache[code];
+  if (!sc) return '<span style="color:#444">-</span>';
+  const cls = sc.total >= 63 ? 'score-high' : sc.total >= 40 ? 'score-mid' : 'score-low';
+  const actCls = sc.total >= 63 ? 'sa-h' : sc.total >= 40 ? 'sa-m' : 'sa-l';
+  return `<span class="score-cell ${cls}">${sc.total}</span><br><span class="score-action ${actCls}">${sc.action}</span>`;
+}
+
 // Render stock table for active group
 function renderStocks() {
   const group = allGroups.find(g => g.id === activeGroupId);
@@ -315,6 +355,7 @@ function renderStocks() {
       <td class="name-cell">${esc(s.name)}</td>
       <td>${s.close || '-'}</td>
       <td class="${cls}">${sign}${(s.pct_change || 0).toFixed(2)}%</td>
+      <td style="text-align:center;min-width:60px"><span class="score-load" data-code="${s.code}" style="color:#444">加载中</span></td>
       <td>
         <div class="act-btns">
           <div class="move-wrap">
@@ -333,9 +374,17 @@ function renderStocks() {
   }).join('');
 
   area.innerHTML = `<table class="stock-table">
-    <thead><tr><th>#</th><th>代码</th><th>名称</th><th>现价</th><th>涨跌幅</th><th>操作</th></tr></thead>
+    <thead><tr><th>#</th><th>代码</th><th>名称</th><th>现价</th><th>涨跌幅</th><th style="text-align:center">评分</th><th>操作</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
+
+  // Fetch scores and fill in
+  const codes = group.stocks.map(s => s.code);
+  fetchScores(codes).then(() => {
+    document.querySelectorAll('.score-load').forEach(el => {
+      el.outerHTML = scoreCell(el.dataset.code);
+    });
+  });
 }
 
 // Select group

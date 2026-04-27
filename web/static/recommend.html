@@ -265,6 +265,21 @@ body {
 .row-err { opacity: .4; cursor: default; }
 .row-err:hover { background: none; border-radius: 0; }
 
+/* Pagination */
+.pagination {
+  display: flex; justify-content: center; align-items: center; gap: 6px;
+  margin-top: 20px; padding: 12px 0;
+}
+.pg-btn {
+  padding: 6px 12px; background: #16213e; border: 1px solid #0f3460;
+  border-radius: 6px; color: #888; font-size: 13px; cursor: pointer;
+  transition: all .15s; white-space: nowrap;
+}
+.pg-btn:hover:not(:disabled) { border-color: #e94560; color: #e94560; }
+.pg-btn:disabled { opacity: .35; cursor: not-allowed; }
+.pg-btn.active { background: #e94560; border-color: #e94560; color: #fff; }
+.pg-info { font-size: 12px; color: #555; margin: 0 8px; }
+
 /* Responsive */
 @media (max-width: 640px) {
   .container { padding: 16px; }
@@ -312,7 +327,10 @@ body {
           <div style="font-size:15px; font-weight:600; color:#e0e0e0;">全量股票扫描</div>
           <div style="font-size:12px; color:#555; margin-top:3px;">扫描全市场股票，筛选高分标的并排序展示</div>
         </div>
-        <button class="btn-clr" id="btnLoadHistory" onclick="loadHistoryResults()" style="font-size:12px;">查看历史结果</button>
+        <button class="btn-go" id="btnScan" onclick="confirmScan(this)" style="padding:7px 20px; font-size:13px; background:#f39c12;">
+          <span class="btn-spin"></span>
+          <span class="btn-text">开始扫描</span>
+        </button>
       </div>
     </div>
     <div class="input-actions">
@@ -329,10 +347,7 @@ body {
           border-radius:6px; color:#e0e0e0; font-size:14px; text-align:center; outline:none;">
         <span style="font-size:11px; color:#555;">元</span>
       </div>
-      <button class="btn-go" id="btnScan" onclick="doFullScan()">
-        <span class="btn-spin"></span>
-        <span class="btn-text">开始扫描</span>
-      </button>
+      <button class="btn-go" id="btnLoadHistory" onclick="loadHistoryResults()">查询</button>
       <button class="btn-clr" id="btnRefresh" onclick="doRefresh()" style="display:none;">
         <span class="btn-spin"></span>
         <span class="btn-text">刷新数据</span>
@@ -348,6 +363,7 @@ body {
   <div class="result-wrap" id="resultWrap" style="display:none;">
     <div class="result-title"><span id="resultTitle"></span></div>
     <div id="resultList"></div>
+    <div class="pagination" id="pagination" style="display:none;"></div>
   </div>
 
   <!-- Empty -->
@@ -592,14 +608,18 @@ function toggleExp(code) {
 
 // === Full Scan ===
 let scanTimer = null;
+let queryPage = 1;
+const querySize = 20;
 
-// Load persisted results from disk
-async function loadHistoryResults() {
+// Load persisted results from disk (with pagination)
+async function loadHistoryResults(page) {
+  if (page === undefined) page = 1;
+  queryPage = page;
   const minScore = parseInt(document.getElementById('minScore').value) || 0;
   const maxPrice = parseFloat(document.getElementById('maxPrice').value) || 10000;
 
   try {
-    const resp = await fetch(`/api/score/results?min_score=${minScore}&max_price=${maxPrice}&page=1&size=1000`);
+    const resp = await fetch(`/api/score/results?min_score=${minScore}&max_price=${maxPrice}&page=${page}&size=${querySize}`);
     const data = await resp.json();
 
     if (data.scan_time) {
@@ -610,13 +630,65 @@ async function loadHistoryResults() {
 
     if (data.results && data.results.length > 0) {
       renderResults(data.results);
+      renderPagination(data.total, data.page);
       document.getElementById('scanHint').textContent = `共 ${data.total} 只股票`;
     } else {
+      document.getElementById('pagination').style.display = 'none';
       document.getElementById('scanHint').textContent = '暂无历史评分数据，请先进行全量扫描';
     }
   } catch (err) {
     alert('加载历史结果失败: ' + err.message);
   }
+}
+
+function renderPagination(total, current) {
+  const el = document.getElementById('pagination');
+  const totalPages = Math.ceil(total / querySize);
+  if (totalPages <= 1) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+
+  let h = '';
+  // Prev
+  h += `<button class="pg-btn" onclick="loadHistoryResults(${current - 1})" ${current <= 1 ? 'disabled' : ''}>&#8249; 上一页</button>`;
+
+  // Page numbers
+  const range = 2;
+  let start = Math.max(1, current - range);
+  let end = Math.min(totalPages, current + range);
+  if (start > 1) h += `<button class="pg-btn" onclick="loadHistoryResults(1)">1</button>`;
+  if (start > 2) h += `<span class="pg-info">...</span>`;
+  for (let i = start; i <= end; i++) {
+    h += `<button class="pg-btn${i === current ? ' active' : ''}" onclick="loadHistoryResults(${i})">${i}</button>`;
+  }
+  if (end < totalPages - 1) h += `<span class="pg-info">...</span>`;
+  if (end < totalPages) h += `<button class="pg-btn" onclick="loadHistoryResults(${totalPages})">${totalPages}</button>`;
+
+  // Next
+  h += `<button class="pg-btn" onclick="loadHistoryResults(${current + 1})" ${current >= totalPages ? 'disabled' : ''}>下一页 &#8250;</button>`;
+
+  // Info
+  h += `<span class="pg-info">${current}/${totalPages} 页</span>`;
+
+  el.innerHTML = h;
+}
+
+let scanConfirmTimer = null;
+function confirmScan(btn) {
+  if (btn.dataset.confirmed === 'true') {
+    btn.dataset.confirmed = '';
+    clearTimeout(scanConfirmTimer);
+    doFullScan();
+    return;
+  }
+  btn.dataset.confirmed = 'true';
+  const orig = btn.style.background;
+  btn.style.background = '#e74c3c';
+  btn.querySelector('.btn-text').textContent = '确认扫描？';
+  scanConfirmTimer = setTimeout(() => {
+    btn.dataset.confirmed = '';
+    btn.style.background = orig;
+    btn.querySelector('.btn-text').textContent = '开始扫描';
+  }, 3000);
 }
 
 async function doFullScan() {
@@ -641,7 +713,6 @@ async function doFullScan() {
     const resp = await fetch('/api/full-scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ min_score: minScore, max_price: maxPrice }),
     });
     await resp.json();
     scanTimer = setInterval(pollScanStatus, 800);
