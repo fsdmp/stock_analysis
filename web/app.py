@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from flask import Flask, jsonify, request, send_from_directory, session, redirect, url_for
 import pandas as pd
+import numpy as np
 import pyarrow.parquet as pq
 
 from stock_data.bs_manager import bs_shutdown
@@ -518,12 +519,39 @@ def api_intraday(code, date):
 
 @app.route("/api/score/<code>")
 def api_score(code):
-    """Return next-day trading score for a stock."""
+    """Return next-day trading score for a stock, using cached data if available."""
     code = code.zfill(6)
     path = DATA_DIR / f"{code}.parquet"
     if not path.exists():
         return jsonify({"error": f"Stock {code} not found"}), 404
 
+    # Try to load from cache first
+    result_file = SCORE_RESULTS_DIR / "latest.parquet"
+    if result_file.exists():
+        try:
+            cached_df = pd.read_parquet(result_file)
+            cached_row = cached_df[cached_df["code"] == code]
+            if not cached_row.empty:
+                # Check if data file has changed
+                current_mtime = path.stat().st_mtime
+                cached_mtime = cached_row.iloc[0].get("data_mtime", 0)
+
+                if current_mtime <= cached_mtime:
+                    # Return cached result
+                    result = cached_row.iloc[0].to_dict()
+                    # Convert numpy types to Python types for JSON serialization
+                    for k, v in result.items():
+                        if pd.isna(v):
+                            result[k] = None
+                        elif isinstance(v, (np.integer, np.int64)):
+                            result[k] = int(v)
+                        elif isinstance(v, (np.floating, np.float64)):
+                            result[k] = float(v)
+                    return jsonify(result)
+        except Exception:
+            pass
+
+    # Fall back to calculation
     from stock_data.scoring import calc_score
     cols = [
         "date", "open", "close", "high", "low", "volume", "pct_change", "turnover",
@@ -549,7 +577,7 @@ def api_score(code):
 @app.route("/api/batch-score", methods=["POST"])
 @login_required
 def api_batch_score():
-    """Score multiple stocks and return ranked results."""
+    """Score multiple stocks and return ranked results, using cached data if available."""
     codes = request.get_json(silent=True) or []
     if not codes or not isinstance(codes, list):
         return jsonify({"error": "请提供股票代码列表"}), 400
@@ -558,7 +586,23 @@ def api_batch_score():
     if not codes:
         return jsonify({"error": "无有效股票代码"}), 400
 
+    # Load cached results if available
+    result_file = SCORE_RESULTS_DIR / "latest.parquet"
+    cached_map = {}
+    cached_mtime_map = {}
+    if result_file.exists():
+        try:
+            cached_df = pd.read_parquet(result_file)
+            for _, row in cached_df.iterrows():
+                cached_map[row["code"]] = row.to_dict()
+                cached_mtime_map[row["code"]] = row.get("data_mtime", 0)
+        except Exception:
+            pass
+
     results = []
+    codes_to_calc = []
+
+    # First pass: try to use cached data
     for code in codes:
         path = DATA_DIR / f"{code}.parquet"
         if not path.exists():
@@ -568,6 +612,30 @@ def api_batch_score():
             })
             continue
 
+        if code in cached_map:
+            # Check if data file has changed
+            current_mtime = path.stat().st_mtime
+            if current_mtime <= cached_mtime_map[code]:
+                # Use cached result
+                result = cached_map[code].copy()
+                # Convert numpy types to Python types
+                for k, v in result.items():
+                    if pd.isna(v):
+                        result[k] = None
+                    elif isinstance(v, (np.integer, np.int64)):
+                        result[k] = int(v)
+                    elif isinstance(v, (np.floating, np.float64)):
+                        result[k] = float(v)
+                results.append(result)
+                continue
+
+        # Need to calculate
+        codes_to_calc.append(code)
+
+    # Second pass: calculate for uncached or changed stocks
+    from stock_data.scoring import calc_score
+    for code in codes_to_calc:
+        path = DATA_DIR / f"{code}.parquet"
         try:
             cols = [
                 "date", "open", "close", "high", "low", "volume", "pct_change", "turnover",
@@ -582,7 +650,6 @@ def api_batch_score():
             cols = [c for c in cols if c in available]
 
             df = pd.read_parquet(path, columns=cols)
-            from stock_data.scoring import calc_score
             result = calc_score(df)
             result["code"] = code
             result["name"] = _stock_names.get(code, "")
