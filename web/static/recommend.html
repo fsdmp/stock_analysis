@@ -307,19 +307,24 @@ body {
   <div class="scan-divider"><div class="line"></div><span>或</span><div class="line"></div></div>
   <div class="input-card">
     <div style="margin-bottom:12px;">
-      <div style="font-size:15px; font-weight:600; color:#e0e0e0;">全量股票扫描</div>
-      <div style="font-size:12px; color:#555; margin-top:3px;">扫描全市场股票，筛选高分标的并排序展示</div>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div style="font-size:15px; font-weight:600; color:#e0e0e0;">全量股票扫描</div>
+          <div style="font-size:12px; color:#555; margin-top:3px;">扫描全市场股票，筛选高分标的并排序展示</div>
+        </div>
+        <button class="btn-clr" id="btnLoadHistory" onclick="loadHistoryResults()" style="font-size:12px;">查看历史结果</button>
+      </div>
     </div>
     <div class="input-actions">
       <div style="display:flex; align-items:center; gap:8px;">
         <span style="font-size:13px; color:#888;">最低评分</span>
-        <input type="number" id="minScore" value="95" min="50" max="100"
+        <input type="number" id="minScore" value="0" min="0" max="100"
           style="width:70px; padding:7px 10px; background:#1a1a2e; border:1px solid #0f3460;
           border-radius:6px; color:#e0e0e0; font-size:14px; text-align:center; outline:none;">
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         <span style="font-size:13px; color:#888;">最高价格</span>
-        <input type="number" id="maxPrice" value="100" min="0" step="10"
+        <input type="number" id="maxPrice" value="10000" min="0" step="10"
           style="width:80px; padding:7px 10px; background:#1a1a2e; border:1px solid #0f3460;
           border-radius:6px; color:#e0e0e0; font-size:14px; text-align:center; outline:none;">
         <span style="font-size:11px; color:#555;">元</span>
@@ -328,7 +333,14 @@ body {
         <span class="btn-spin"></span>
         <span class="btn-text">开始扫描</span>
       </button>
+      <button class="btn-clr" id="btnRefresh" onclick="doRefresh()" style="display:none;">
+        <span class="btn-spin"></span>
+        <span class="btn-text">刷新数据</span>
+      </button>
       <span class="hint" id="scanHint"></span>
+    </div>
+    <div id="scanTime" style="font-size:11px; color:#444; margin-top:8px; display:none;">
+      上次扫描: <span id="lastScanTime"></span>
     </div>
   </div>
 
@@ -580,9 +592,35 @@ function toggleExp(code) {
 // === Full Scan ===
 let scanTimer = null;
 
+// Load persisted results from disk
+async function loadHistoryResults() {
+  const minScore = parseInt(document.getElementById('minScore').value) || 0;
+  const maxPrice = parseFloat(document.getElementById('maxPrice').value) || 10000;
+
+  try {
+    const resp = await fetch(`/api/score/results?min_score=${minScore}&max_price=${maxPrice}&page=1&size=1000`);
+    const data = await resp.json();
+
+    if (data.scan_time) {
+      document.getElementById('lastScanTime').textContent = new Date(data.scan_time).toLocaleString('zh-CN');
+      document.getElementById('scanTime').style.display = 'block';
+      document.getElementById('btnRefresh').style.display = 'inline-block';
+    }
+
+    if (data.results && data.results.length > 0) {
+      renderResults(data.results);
+      document.getElementById('scanHint').textContent = `共 ${data.total} 只股票`;
+    } else {
+      document.getElementById('scanHint').textContent = '暂无历史评分数据，请先进行全量扫描';
+    }
+  } catch (err) {
+    alert('加载历史结果失败: ' + err.message);
+  }
+}
+
 async function doFullScan() {
-  const minScore = parseInt(document.getElementById('minScore').value) || 95;
-  const maxPrice = parseFloat(document.getElementById('maxPrice').value) || 100;
+  const minScore = parseInt(document.getElementById('minScore').value) || 0;
+  const maxPrice = parseFloat(document.getElementById('maxPrice').value) || 10000;
   const btn = document.getElementById('btnScan');
   btn.classList.add('loading');
   btn.disabled = true;
@@ -615,18 +653,56 @@ async function doFullScan() {
   }
 }
 
+async function doRefresh() {
+  const minScore = parseInt(document.getElementById('minScore').value) || 0;
+  const maxPrice = parseFloat(document.getElementById('maxPrice').value) || 10000;
+  const btn = document.getElementById('btnRefresh');
+  btn.classList.add('loading');
+  btn.disabled = true;
+
+  const ov = document.getElementById('overlay');
+  document.getElementById('ovText').textContent = '正在刷新评分数据...';
+  document.getElementById('ovSub').textContent = '检查更新中...';
+  const prog = document.getElementById('ovProg');
+  const progBar = document.getElementById('ovProgBar');
+  prog.style.display = 'block';
+  progBar.style.width = '0%';
+  ov.classList.add('active');
+
+  try {
+    const resp = await fetch('/api/score/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ min_score: minScore, max_price: maxPrice }),
+    });
+    const result = await resp.json();
+
+    if (result.status === 'not_found') {
+      alert('暂无评分数据，请先运行全量扫描');
+      btn.classList.remove('loading');
+      btn.disabled = false;
+      ov.classList.remove('active');
+      prog.style.display = 'none';
+      return;
+    }
+
+    scanTimer = setInterval(pollScanStatus, 800);
+  } catch (err) {
+    alert('启动刷新失败: ' + err.message);
+    btn.classList.remove('loading');
+    btn.disabled = false;
+    ov.classList.remove('active');
+    prog.style.display = 'none';
+  }
+}
+
 async function pollScanStatus() {
   try {
-    const resp = await fetch('/api/full-scan/status');
+    const resp = await fetch('/api/score/scan/status');
     const d = await resp.json();
     const pct = d.total > 0 ? (d.current / d.total * 100).toFixed(1) : 0;
     document.getElementById('ovSub').textContent = `${d.current} / ${d.total} — ${d.code}`;
     document.getElementById('ovProgBar').style.width = pct + '%';
-    if (d.found > 0) {
-      const f = document.getElementById('ovFound');
-      f.textContent = `已发现 ${d.found} 只高分股票`;
-      f.classList.add('active');
-    }
     // Render live stock list
     const listEl = document.getElementById('ovList');
     if (d.results && d.results.length > 0) {
@@ -655,19 +731,20 @@ async function pollScanStatus() {
       document.getElementById('ovProg').style.display = 'none';
       document.getElementById('ovFound').classList.remove('active');
       listEl.innerHTML = '';
+
       document.getElementById('btnScan').classList.remove('loading');
       document.getElementById('btnScan').disabled = false;
-      document.getElementById('scanHint').textContent = `扫描完成，发现 ${d.results.length} 只`;
-      if (d.results.length) {
+      document.getElementById('btnRefresh').classList.remove('loading');
+      document.getElementById('btnRefresh').disabled = false;
+      document.getElementById('scanHint').textContent = d.message || '完成';
+
+      // Update scan time
+      document.getElementById('lastScanTime').textContent = new Date().toLocaleString('zh-CN');
+      document.getElementById('scanTime').style.display = 'block';
+      document.getElementById('btnRefresh').style.display = 'inline-block';
+
+      if (d.results && d.results.length) {
         renderResults(d.results);
-      } else {
-        document.getElementById('emptyState').style.display = 'none';
-        const wrap = document.getElementById('resultWrap');
-        wrap.style.display = '';
-        document.getElementById('resultTitle').innerHTML =
-          `<strong>全量扫描结果</strong> 评分≥${d.min_score} 的股票共 <strong>0</strong> 只`;
-        document.getElementById('resultList').innerHTML =
-          '<div style="text-align:center;padding:60px 24px;color:#555;font-size:13px;">未发现符合条件的股票，可尝试降低最低评分</div>';
       }
     }
   } catch (err) {

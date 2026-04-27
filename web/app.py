@@ -19,6 +19,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "stocks"
 CACHE_DIR = Path(__file__).resolve().parent.parent / "data"
 STRATEGIES_DIR = Path(__file__).resolve().parent.parent / "strategies"
 STRATEGY_RESULTS_DIR = Path(__file__).resolve().parent.parent / "data" / "strategy_results"
+SCORE_RESULTS_DIR = Path(__file__).resolve().parent.parent / "data" / "score_results"
 STOCK_NAMES_CACHE = CACHE_DIR / "stock_names.json"
 WATCHLIST_FILE = CACHE_DIR / "watchlist.json"
 app = Flask(__name__, static_folder="static", static_url_path="")
@@ -52,6 +53,11 @@ _full_scan_status = {
     "running": False, "done": False, "message": "",
     "current": 0, "total": 0, "code": "",
     "results": [], "min_score": 95,
+}
+_score_scan_status = {
+    "running": False, "done": False, "message": "",
+    "current": 0, "total": 0, "code": "",
+    "results": [], "_saved": False,
 }
 _strategy_scan_status = {
     "running": False, "done": False, "message": "",
@@ -596,27 +602,30 @@ def api_batch_score():
 @app.route("/api/full-scan", methods=["POST"])
 @login_required
 def api_full_scan():
-    """Start full market scan for high-score stocks in background."""
-    if _full_scan_status["running"]:
-        return jsonify({"status": "already_running", "message": "扫描正在进行中"})
+    """Start full market score scan and save results to disk."""
+    if _score_scan_status["running"]:
+        return jsonify({"status": "already_running", "message": "评分扫描正在进行中"})
 
     data = request.get_json(silent=True) or {}
-    min_score = int(data.get("min_score", 95))
+    min_score = int(data.get("min_score", 0))
     min_score = max(0, min(100, min_score))
-    max_price = float(data.get("max_price", 100))
+    max_price = float(data.get("max_price", 10000))
 
     def run_scan():
         import os
-        _full_scan_status.update({
+        from datetime import datetime
+
+        _score_scan_status.update({
             "running": True, "done": False, "results": [],
-            "min_score": min_score, "current": 0, "total": 0,
-            "code": "", "message": "正在扫描...",
+            "current": 0, "total": 0, "code": "",
+            "min_score": min_score, "_saved": False,
+            "message": "正在扫描...",
         })
 
         files = sorted(DATA_DIR.glob("*.parquet"))
         # Pre-filter: skip stocks with close > max_price
         files = [f for f in files if _stock_index.get(f.stem, {}).get("close", 0) <= max_price]
-        _full_scan_status["total"] = len(files)
+        _score_scan_status["total"] = len(files)
 
         from stock_data.scoring import calc_score
 
@@ -645,62 +654,291 @@ def api_full_scan():
                 if len(df) < 30:
                     return None
                 result = calc_score(df)
-                if result["total"] >= min_score:
-                    result["code"] = code
-                    result["name"] = _stock_names.get(code, "")
-                    result["close"] = round(float(df["close"].iloc[-1]), 2)
-                    result["pct_change"] = round(
-                        float(df["pct_change"].iloc[-1] or 0), 2
-                    )
-                    return result
+                result["code"] = code
+                result["name"] = _stock_names.get(code, "")
+                result["close"] = round(float(df["close"].iloc[-1]), 2)
+                result["pct_change"] = round(float(df["pct_change"].iloc[-1] or 0), 2)
+                result["data_mtime"] = f.stat().st_mtime
+                return result
             except Exception:
                 pass
             return None
 
         workers = min(os.cpu_count() or 4, 8)
+        all_results = []
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(_score_one, f): f for f in files}
             for future in as_completed(futures):
                 code = futures[future].stem
-                _full_scan_status["current"] += 1
-                _full_scan_status["code"] = code
+                _score_scan_status["current"] += 1
+                _score_scan_status["code"] = code
                 try:
                     r = future.result()
                     if r:
-                        _full_scan_status["results"].append(r)
+                        all_results.append(r)
                 except Exception:
                     pass
 
-        _full_scan_status["results"].sort(
-            key=lambda x: x.get("total", 0), reverse=True
-        )
-        _full_scan_status["running"] = False
-        _full_scan_status["done"] = True
-        _full_scan_status["message"] = (
-            f"扫描完成，{len(_full_scan_status['results'])} 只股票评分≥{min_score}"
-        )
+        # Sort by total score and save to disk
+        all_results.sort(key=lambda x: x.get("total", 0), reverse=True)
+        _score_scan_status["results"] = all_results
+
+        # Save to parquet file
+        SCORE_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        result_df = pd.DataFrame(all_results)
+        result_file = SCORE_RESULTS_DIR / "latest.parquet"
+        result_df.to_parquet(result_file, index=False)
+
+        # Also save a summary JSON
+        summary_file = SCORE_RESULTS_DIR / "summary.json"
+        with open(summary_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "scan_time": datetime.now().isoformat(timespec="seconds"),
+                "total_stocks": len(all_results),
+                "high_score_count": len([r for r in all_results if r["total"] >= min_score]),
+                "min_score_filter": min_score,
+            }, f, ensure_ascii=False)
+
+        _score_scan_status["running"] = False
+        _score_scan_status["done"] = True
+        _score_scan_status["_saved"] = True
+        _score_scan_status["message"] = f"扫描完成，共 {len(all_results)} 只股票，其中 {len([r for r in all_results if r['total'] >= min_score])} 只评分≥{min_score}"
 
     t = threading.Thread(target=run_scan, daemon=True)
     t.start()
-    return jsonify({"status": "started", "message": "全量扫描已启动"})
+    return jsonify({"status": "started", "message": "评分扫描已启动"})
 
 
 @app.route("/api/full-scan/status")
 @login_required
 def api_full_scan_status():
-    """Check full scan progress."""
+    """Check score scan progress (legacy endpoint for backward compatibility)."""
+    return api_score_scan_status()
+
+
+@app.route("/api/score/scan/status")
+@login_required
+def api_score_scan_status():
+    """Check score scan progress."""
     status = {
-        "running": _full_scan_status["running"],
-        "done": _full_scan_status["done"],
-        "message": _full_scan_status["message"],
-        "current": _full_scan_status["current"],
-        "total": _full_scan_status["total"],
-        "code": _full_scan_status["code"],
-        "min_score": _full_scan_status["min_score"],
-        "found": len(_full_scan_status["results"]),
-        "results": list(_full_scan_status["results"]),
+        "running": _score_scan_status["running"],
+        "done": _score_scan_status["done"],
+        "message": _score_scan_status["message"],
+        "current": _score_scan_status["current"],
+        "total": _score_scan_status["total"],
+        "code": _score_scan_status["code"],
+        "min_score": _score_scan_status.get("min_score", 0),
+        "found": len(_score_scan_status["results"]),
+        "results": list(_score_scan_status["results"]),
     }
     return jsonify(status)
+
+
+# === Score APIs ===
+
+@app.route("/api/score/results")
+@login_required
+def api_score_results():
+    """Get persisted score results with filtering."""
+    min_score = int(request.args.get("min_score", 0))
+    max_score = int(request.args.get("max_score", 100))
+    max_price = float(request.args.get("max_price", 10000))
+    page = int(request.args.get("page", 1))
+    size = int(request.args.get("size", 50))
+
+    result_file = SCORE_RESULTS_DIR / "latest.parquet"
+    summary_file = SCORE_RESULTS_DIR / "summary.json"
+
+    if not result_file.exists():
+        return jsonify({
+            "results": [],
+            "total": 0,
+            "page": page,
+            "size": size,
+            "scan_time": None,
+            "message": "暂无评分数据，请先运行评分扫描"
+        })
+
+    try:
+        df = pd.read_parquet(result_file)
+
+        # Apply filters
+        if min_score > 0:
+            df = df[df["total"] >= min_score]
+        if max_score < 100:
+            df = df[df["total"] <= max_score]
+        if max_price < 10000:
+            df = df[df["close"] <= max_price]
+
+        total = len(df)
+
+        # Pagination
+        start = (page - 1) * size
+        df_page = df.iloc[start:start + size]
+
+        # Convert to list of dicts
+        results = df_page.to_dict("records")
+
+        # Read scan time from summary
+        scan_time = None
+        if summary_file.exists():
+            with open(summary_file, "r", encoding="utf-8") as f:
+                summary = json.load(f)
+                scan_time = summary.get("scan_time")
+
+        return jsonify({
+            "results": results,
+            "total": total,
+            "page": page,
+            "size": size,
+            "scan_time": scan_time,
+        })
+    except Exception as e:
+        return jsonify({
+            "results": [],
+            "total": 0,
+            "page": page,
+            "size": size,
+            "scan_time": None,
+            "error": str(e)
+        }), 500
+
+
+@app.route("/api/score/refresh", methods=["POST"])
+@login_required
+def api_score_refresh():
+    """Incremental refresh score results - only recalculate stocks with updated data."""
+    if _score_scan_status["running"]:
+        return jsonify({"status": "already_running", "message": "评分扫描正在进行中"})
+
+    result_file = SCORE_RESULTS_DIR / "latest.parquet"
+    if not result_file.exists():
+        return jsonify({"status": "not_found", "message": "暂无评分数据，请先运行全量扫描"})
+
+    data = request.get_json(silent=True) or {}
+    min_score = int(data.get("min_score", 0))
+    min_score = max(0, min(100, min_score))
+    max_price = float(data.get("max_price", 10000))
+
+    def run_refresh():
+        import os
+        from datetime import datetime
+
+        # Load existing results
+        old_df = pd.read_parquet(result_file)
+        old_mtime_map = dict(zip(old_df["code"], old_df["data_mtime"]))
+
+        _score_scan_status.update({
+            "running": True, "done": False, "results": [],
+            "current": 0, "total": 0, "code": "",
+            "min_score": min_score, "_saved": False,
+            "message": "正在检查更新...",
+        })
+
+        files = sorted(DATA_DIR.glob("*.parquet"))
+        # Pre-filter: skip stocks with close > max_price
+        files = [f for f in files if _stock_index.get(f.stem, {}).get("close", 0) <= max_price]
+        _score_scan_status["total"] = len(files)
+
+        from stock_data.scoring import calc_score
+
+        _scan_cols = [
+            "date", "open", "close", "high", "low", "volume",
+            "pct_change", "turnover",
+            "ma5", "ma7", "ma10", "ma20",
+            "vwma5", "vwma10", "vwma20",
+            "bb_upper", "bb_middle", "bb_lower", "bb_bandwidth",
+            "macd_dif", "macd_dea", "macd_hist",
+            "kdj_k", "kdj_d", "kdj_j",
+        ]
+
+        def _score_one(f):
+            code = f.stem
+            try:
+                current_mtime = f.stat().st_mtime
+                old_mtime = old_mtime_map.get(code, 0)
+
+                # Skip if data hasn't changed
+                if current_mtime <= old_mtime:
+                    return None
+
+                pf = pq.ParquetFile(f)
+                total_rows = pf.metadata.num_rows
+                if total_rows < 30:
+                    return None
+                available = set(pf.schema.names)
+                cols = [c for c in _scan_cols if c in available]
+                tail = min(total_rows, 150)
+                df = pd.read_parquet(f, columns=cols).iloc[-tail:].reset_index(drop=True)
+                if len(df) < 30:
+                    return None
+                result = calc_score(df)
+                result["code"] = code
+                result["name"] = _stock_names.get(code, "")
+                result["close"] = round(float(df["close"].iloc[-1]), 2)
+                result["pct_change"] = round(float(df["pct_change"].iloc[-1] or 0), 2)
+                result["data_mtime"] = current_mtime
+                return result
+            except Exception:
+                pass
+            return None
+
+        workers = min(os.cpu_count() or 4, 8)
+        updated_results = []
+        skipped_count = 0
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_score_one, f): f for f in files}
+            for future in as_completed(futures):
+                code = futures[future].stem
+                _score_scan_status["current"] += 1
+                _score_scan_status["code"] = code
+                try:
+                    r = future.result()
+                    if r:
+                        updated_results.append(r)
+                    else:
+                        skipped_count += 1
+                except Exception:
+                    pass
+
+        # Merge updated results with old data
+        updated_codes = set(r["code"] for r in updated_results)
+        merged_results = [
+            r for r in old_df.to_dict("records")
+            if r["code"] not in updated_codes
+        ] + updated_results
+
+        # Sort by total score
+        merged_results.sort(key=lambda x: x.get("total", 0), reverse=True)
+        _score_scan_status["results"] = merged_results
+
+        # Save to disk
+        SCORE_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        result_df = pd.DataFrame(merged_results)
+        result_df.to_parquet(result_file, index=False)
+
+        # Update summary
+        summary_file = SCORE_RESULTS_DIR / "summary.json"
+        with open(summary_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "scan_time": datetime.now().isoformat(timespec="seconds"),
+                "total_stocks": len(merged_results),
+                "high_score_count": len([r for r in merged_results if r["total"] >= min_score]),
+                "min_score_filter": min_score,
+                "last_refresh": datetime.now().isoformat(timespec="seconds"),
+                "updated_count": len(updated_results),
+                "skipped_count": skipped_count,
+            }, f, ensure_ascii=False)
+
+        _score_scan_status["running"] = False
+        _score_scan_status["done"] = True
+        _score_scan_status["_saved"] = True
+        _score_scan_status["message"] = f"刷新完成，更新 {len(updated_results)} 只股票，跳过 {skipped_count} 只未变化股票"
+
+    t = threading.Thread(target=run_refresh, daemon=True)
+    t.start()
+    return jsonify({"status": "started", "message": "评分刷新已启动"})
 
 
 # === Strategy APIs ===
