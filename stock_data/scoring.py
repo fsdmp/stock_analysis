@@ -1560,8 +1560,8 @@ def calc_score(df: pd.DataFrame) -> dict:
     # Detect trend FIRST - all scorers use this
     trend = _detect_trend(cols, n)
 
-    zones = calc_support_resistance(df)
-    signals = calc_signals(df)
+    zones = calc_support_resistance(df, _cols=cols)
+    signals = calc_signals(df, _cols=cols)
 
     dim_scores = []
     dim_raw = []

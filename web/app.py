@@ -4,7 +4,6 @@ import sys
 import json
 import atexit
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -541,7 +540,14 @@ def api_score(code):
                     result = cached_row.iloc[0].to_dict()
                     # Convert numpy types to Python types for JSON serialization
                     for k, v in result.items():
-                        if pd.isna(v):
+                        if k == "dimensions" and isinstance(v, str):
+                            try:
+                                result[k] = json.loads(v)
+                            except Exception:
+                                pass
+                        elif isinstance(v, np.ndarray):
+                            result[k] = v.tolist()
+                        elif pd.isna(v):
                             result[k] = None
                         elif isinstance(v, (np.integer, np.int64)):
                             result[k] = int(v)
@@ -620,7 +626,14 @@ def api_batch_score():
                 result = cached_map[code].copy()
                 # Convert numpy types to Python types
                 for k, v in result.items():
-                    if pd.isna(v):
+                    if k == "dimensions" and isinstance(v, str):
+                        try:
+                            result[k] = json.loads(v)
+                        except Exception:
+                            pass
+                    elif isinstance(v, np.ndarray):
+                        result[k] = v.tolist()
+                    elif pd.isna(v):
                         result[k] = None
                     elif isinstance(v, (np.integer, np.int64)):
                         result[k] = int(v)
@@ -715,7 +728,6 @@ def api_full_scan():
                     return None
                 available = set(pf.schema.names)
                 cols = [c for c in _scan_cols if c in available]
-                # Only read the last 150 rows — scoring only needs recent data
                 tail = min(total_rows, 150)
                 df = pd.read_parquet(f, columns=cols).iloc[-tail:].reset_index(drop=True)
                 if len(df) < 30:
@@ -731,28 +743,52 @@ def api_full_scan():
                 pass
             return None
 
-        workers = min(os.cpu_count() or 4, 8)
-        all_results = []
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(_score_one, f): f for f in files}
-            for future in as_completed(futures):
-                code = futures[future].stem
-                _score_scan_status["current"] += 1
-                _score_scan_status["code"] = code
+        def _score_one_timeout(f, timeout=30):
+            """Run _score_one with a per-stock timeout."""
+            import queue
+            q = queue.Queue()
+
+            def _worker():
                 try:
-                    r = future.result()
-                    if r:
-                        all_results.append(r)
+                    q.put(_score_one(f))
                 except Exception:
-                    pass
+                    q.put(None)
+
+            t = threading.Thread(target=_worker, daemon=True)
+            t.start()
+            t.join(timeout=timeout)
+            if t.is_alive():
+                print(f"[WARN] {f.stem} timed out after {timeout}s, skipping")
+                return None
+            return q.get_nowait()
+
+        all_results = []
+        for i, f in enumerate(files):
+            _score_scan_status["current"] = i + 1
+            _score_scan_status["code"] = f.stem
+            try:
+                r = _score_one_timeout(f)
+                if r:
+                    all_results.append(r)
+            except Exception:
+                pass
 
         # Sort by total score and save to disk
         all_results.sort(key=lambda x: x.get("total", 0), reverse=True)
         _score_scan_status["results"] = all_results
 
-        # Save to parquet file
+        # Save to parquet file — serialize 'dimensions' as JSON string
         SCORE_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        result_df = pd.DataFrame(all_results)
+        flat_results = []
+        for r in all_results:
+            fr = {}
+            for k, v in r.items():
+                if k == "dimensions":
+                    fr[k] = json.dumps(v, ensure_ascii=False)
+                else:
+                    fr[k] = v
+            flat_results.append(fr)
+        result_df = pd.DataFrame(flat_results)
         result_file = SCORE_RESULTS_DIR / "latest.parquet"
         result_df.to_parquet(result_file, index=False)
 
@@ -796,7 +832,6 @@ def api_score_scan_status():
         "code": _score_scan_status["code"],
         "min_score": _score_scan_status.get("min_score", 0),
         "found": len(_score_scan_status["results"]),
-        "results": list(_score_scan_status["results"]),
     }
     return jsonify(status)
 
@@ -843,8 +878,24 @@ def api_score_results():
         start = (page - 1) * size
         df_page = df.iloc[start:start + size]
 
-        # Convert to list of dicts
-        results = df_page.to_dict("records")
+        # Convert to list of dicts, ensuring numpy types are serializable
+        results = []
+        for record in df_page.to_dict("records"):
+            for k, v in record.items():
+                if k == "dimensions" and isinstance(v, str):
+                    try:
+                        record[k] = json.loads(v)
+                    except Exception:
+                        pass
+                elif isinstance(v, np.ndarray):
+                    record[k] = v.tolist()
+                elif pd.isna(v):
+                    record[k] = None
+                elif isinstance(v, (np.integer, np.int64)):
+                    record[k] = int(v)
+                elif isinstance(v, (np.floating, np.float64)):
+                    record[k] = float(v)
+            results.append(record)
 
         # Read scan time from summary
         scan_time = None
@@ -950,24 +1001,20 @@ def api_score_refresh():
                 pass
             return None
 
-        workers = min(os.cpu_count() or 4, 8)
         updated_results = []
         skipped_count = 0
 
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(_score_one, f): f for f in files}
-            for future in as_completed(futures):
-                code = futures[future].stem
-                _score_scan_status["current"] += 1
-                _score_scan_status["code"] = code
-                try:
-                    r = future.result()
-                    if r:
-                        updated_results.append(r)
-                    else:
-                        skipped_count += 1
-                except Exception:
-                    pass
+        for i, f in enumerate(files):
+            _score_scan_status["current"] = i + 1
+            _score_scan_status["code"] = f.stem
+            try:
+                r = _score_one(f)
+                if r:
+                    updated_results.append(r)
+                else:
+                    skipped_count += 1
+            except Exception:
+                skipped_count += 1
 
         # Merge updated results with old data
         updated_codes = set(r["code"] for r in updated_results)
@@ -980,9 +1027,18 @@ def api_score_refresh():
         merged_results.sort(key=lambda x: x.get("total", 0), reverse=True)
         _score_scan_status["results"] = merged_results
 
-        # Save to disk
+        # Save to disk — serialize 'dimensions' as JSON string
         SCORE_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        result_df = pd.DataFrame(merged_results)
+        flat_results = []
+        for r in merged_results:
+            fr = {}
+            for k, v in r.items():
+                if k == "dimensions":
+                    fr[k] = json.dumps(v, ensure_ascii=False)
+                else:
+                    fr[k] = v
+            flat_results.append(fr)
+        result_df = pd.DataFrame(flat_results)
         result_df.to_parquet(result_file, index=False)
 
         # Update summary
@@ -1096,19 +1152,15 @@ def api_strategy_scan():
                 pass
             return None
 
-        workers = min(os.cpu_count() or 4, 8)
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(_scan_one, f): f for f in files}
-            for future in as_completed(futures):
-                code = futures[future].stem
-                _strategy_scan_status["current"] += 1
-                _strategy_scan_status["code"] = code
-                try:
-                    r = future.result()
-                    if r:
-                        _strategy_scan_status["results"].append(r)
-                except Exception:
-                    pass
+        for i, f in enumerate(files):
+            _strategy_scan_status["current"] = i + 1
+            _strategy_scan_status["code"] = f.stem
+            try:
+                r = _scan_one(f)
+                if r:
+                    _strategy_scan_status["results"].append(r)
+            except Exception:
+                pass
 
         _strategy_scan_status["running"] = False
         _strategy_scan_status["done"] = True

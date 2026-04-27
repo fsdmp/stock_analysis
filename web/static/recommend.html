@@ -416,11 +416,12 @@ async function doSearch(q, autoAdd = false) {
     return;
   }
   dd.innerHTML = data.map(s => {
-    const c = s.pct_change >= 0 ? 'color:#e74c3c' : 'color:#2ecc71';
-    const sg = s.pct_change >= 0 ? '+' : '';
+    const pctVal = s.pct_change ?? 0;
+    const c = pctVal >= 0 ? 'color:#e74c3c' : 'color:#2ecc71';
+    const sg = pctVal >= 0 ? '+' : '';
     return `<div class="dd-item" data-c="${s.code}" data-n="${s.name||''}" onclick="pick(this)">
       <span><span class="dc">${s.code}</span><span class="dn">${s.name||''}</span></span>
-      <span style="${c}">${sg}${s.pct_change.toFixed(2)}%</span>
+      <span style="${c}">${sg}${pctVal.toFixed(2)}%</span>
     </div>`;
   }).join('');
   dd.classList.add('show');
@@ -559,7 +560,7 @@ function renderResults(results) {
           <div class="row-name">${r.name || r.code}<span class="code">${r.code}</span></div>
           <div class="row-sub">
             <span style="color:#999">现价 ${r.close}</span>
-            <span style="${pc};font-weight:600">${ps}${r.pct_change.toFixed(2)}%</span>
+            <span style="${pc};font-weight:600">${ps}${(r.pct_change ?? 0).toFixed(2)}%</span>
           </div>
           <div class="row-chips">${chips}</div>
         </div>

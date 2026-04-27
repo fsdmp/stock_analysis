@@ -427,11 +427,12 @@ async function searchStock(q) {
     return;
   }
   searchDd.innerHTML = data.map(s => {
-    const c = s.pct_change >= 0 ? 'color:#e74c3c' : 'color:#2ecc71';
-    const sg = s.pct_change >= 0 ? '+' : '';
+    const pctVal = s.pct_change ?? 0;
+    const c = pctVal >= 0 ? 'color:#e74c3c' : 'color:#2ecc71';
+    const sg = pctVal >= 0 ? '+' : '';
     return `<div class="dd-item" onclick="addStock('${s.code}')">
       <span><span class="dc">${s.code}</span><span class="dn">${s.name||''}</span></span>
-      <span style="${c}">${sg}${s.pct_change.toFixed(2)}%</span>
+      <span style="${c}">${sg}${pctVal.toFixed(2)}%</span>
     </div>`;
   }).join('');
   searchDd.classList.add('show');

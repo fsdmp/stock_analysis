@@ -651,7 +651,7 @@ function renderContentTable(results) {
         <td class="code-cell" onclick="window.open('/stock/${r.code}','_blank')">${r.code}</td>
         <td>${r.name || '-'}</td>
         <td>${r.close}</td>
-        <td class="${cls}">${sign}${r.pct_change.toFixed(2)}%</td>
+        <td class="${cls}">${sign}${(r.pct_change ?? 0).toFixed(2)}%</td>
         <td style="${r.score != null ? 'color:' + (r.score >= 63 ? '#e94560' : r.score >= 50 ? '#f39c12' : '#888') + ';font-weight:600' : ''}">${r.score != null ? r.score : '-'}</td>
         <td><button class="s-btn" onclick="window.open('/stock/${r.code}','_blank')" style="padding:4px 10px;font-size:11px">K线</button></td>
       </tr>`;

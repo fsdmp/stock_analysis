@@ -24,7 +24,7 @@ def _valid(v) -> bool:
 # Multi-Factor + Anti-Trap Rules (identical logic to the original JS calcSR)
 # ---------------------------------------------------------------------------
 
-def calc_support_resistance(df: pd.DataFrame, lookback: int = 120) -> dict:
+def calc_support_resistance(df: pd.DataFrame, lookback: int = 120, *, _cols: dict = None) -> dict:
     """Calculate support and resistance zones.
 
     Returns::
@@ -36,17 +36,26 @@ def calc_support_resistance(df: pd.DataFrame, lookback: int = 120) -> dict:
 
     Each list is sorted by score descending, max 3 entries.
     """
-    n = len(df)
+    if _cols is not None:
+        n = len(_cols["close"])
+    else:
+        n = len(df)
     if n < 20:
         return {"resistance": [], "support": []}
 
     lb = min(lookback, n)
     si = n - lb  # start index for lookback window
 
-    close = df["close"].values
-    high = df["high"].values
-    low = df["low"].values
-    vol = df["volume"].fillna(0).values.astype(np.float64)
+    if _cols is not None:
+        close = _cols["close"]
+        high = _cols["high"]
+        low = _cols["low"]
+        vol = np.nan_to_num(_cols.get("volume", np.zeros(n)))
+    else:
+        close = df["close"].values
+        high = df["high"].values
+        low = df["low"].values
+        vol = df["volume"].fillna(0).values.astype(np.float64)
 
     cp = close[n - 1]
     if not cp or cp <= 0:
@@ -111,11 +120,19 @@ def calc_support_resistance(df: pd.DataFrame, lookback: int = 120) -> dict:
         _add_bar_points(i)
 
     # --- Factor 2: Moving Averages ---
-    last = df.iloc[n - 1]
-    for col, score in [("ma5", 12), ("ma10", 18), ("ma20", 30)]:
-        v = last.get(col)
-        if _valid(v):
-            pts.append({"p": float(v), "s": score})
+    if _cols is not None:
+        for col, score in [("ma5", 12), ("ma10", 18), ("ma20", 30)]:
+            arr = _cols.get(col)
+            if arr is not None:
+                v = arr[n - 1]
+                if np.isfinite(v):
+                    pts.append({"p": float(v), "s": score})
+    else:
+        last = df.iloc[n - 1]
+        for col, score in [("ma5", 12), ("ma10", 18), ("ma20", 30)]:
+            v = last.get(col)
+            if _valid(v):
+                pts.append({"p": float(v), "s": score})
 
     # --- Factor 3: Volume Spikes (Rule 5 filter) ---
     for i in range(si, n):
@@ -295,7 +312,7 @@ def calc_support_resistance(df: pd.DataFrame, lookback: int = 120) -> dict:
 # Signal Detection (identical logic to the original JS calcSignals)
 # ---------------------------------------------------------------------------
 
-def calc_signals(df: pd.DataFrame) -> dict:
+def calc_signals(df: pd.DataFrame, *, _cols: dict = None) -> dict:
     """Detect trading signals from a stock DataFrame with indicator columns.
 
     Requires columns: date, open, close, high, low, volume, pct_change,
@@ -304,7 +321,10 @@ def calc_signals(df: pd.DataFrame) -> dict:
     Returns a dict of signal arrays, each entry: {d: date_str, v: value, g: direction, ...}
     Keys: ma, macd, macdDiv, kdj, kdjExt, vol, squeeze, volPrice
     """
-    n = len(df)
+    if _cols is not None:
+        n = len(_cols["close"])
+    else:
+        n = len(df)
     sig: dict[str, list] = {
         "ma": [], "macd": [], "macdDiv": [], "kdj": [], "kdjExt": [],
         "vol": [], "squeeze": [], "volPrice": [],
@@ -314,22 +334,39 @@ def calc_signals(df: pd.DataFrame) -> dict:
 
     s0 = max(1, n - 300)
 
-    date = df["date"].values
-    close = df["close"].values
-    high = df["high"].values
-    low = df["low"].values
-    vol_arr = df["volume"].fillna(0).values.astype(np.float64)
-    pct = df["pct_change"].fillna(0).values if "pct_change" in df.columns else np.zeros(n)
+    if _cols is not None:
+        close = _cols["close"]
+        high = _cols["high"]
+        low = _cols["low"]
+        vol_arr = np.nan_to_num(_cols.get("volume", np.zeros(n)))
+        pct = np.nan_to_num(_cols.get("pct_change", np.zeros(n)))
+        date_arr = _cols.get("date")
+        date_strs = [str(d)[:10] for d in date_arr] if date_arr is not None else []
 
-    # Pre-convert dates to YYYY-MM-DD strings (avoid closure issues)
-    date_strs = [str(d)[:10] for d in date]
+        def _v(idx, col):
+            arr = _cols.get(col)
+            if arr is None or idx < 0 or idx >= len(arr):
+                return False
+            return np.isfinite(arr[idx])
 
-    def _v(idx, col):
-        val = df.iloc[idx].get(col)
-        return _valid(val)
+        def _get(idx, col):
+            return _cols[col][idx]
+    else:
+        date = df["date"].values
+        close = df["close"].values
+        high = df["high"].values
+        low = df["low"].values
+        vol_arr = df["volume"].fillna(0).values.astype(np.float64)
+        pct = df["pct_change"].fillna(0).values if "pct_change" in df.columns else np.zeros(n)
 
-    def _get(idx, col):
-        return df.iloc[idx][col]
+        date_strs = [str(d)[:10] for d in date]
+
+        def _v(idx, col):
+            val = df.iloc[idx].get(col)
+            return _valid(val)
+
+        def _get(idx, col):
+            return df.iloc[idx][col]
 
     def _date_str(idx):
         return date_strs[idx]
