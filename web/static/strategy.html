@@ -1235,13 +1235,28 @@ async function refreshScan(filename) {
     body: JSON.stringify({ strategy: filename }),
   });
 
+  let _pollErrors = 0;
+  let _lastProgress = -1;
+  let _stallCount = 0;
   const timer = setInterval(async () => {
     try {
       const resp = await fetch('/api/strategy/scan/status');
+      if (!resp.ok) {
+        _pollErrors++;
+        if (_pollErrors > 5) {
+          clearInterval(timer);
+          ov.classList.remove('active');
+          alert('扫描状态查询失败，请刷新页面重试');
+        }
+        return;
+      }
+      _pollErrors = 0;
       const d = await resp.json();
       const pct = d.total > 0 ? (d.current / d.total * 100).toFixed(0) : 0;
       document.getElementById('ovSub').textContent = `${d.current} / ${d.total}`;
       document.getElementById('ovBar').style.width = pct + '%';
+      if (d.message) document.getElementById('ovText').textContent = d.message;
+      if (d.current === _lastProgress) { _stallCount++; } else { _stallCount = 0; _lastProgress = d.current; }
       if (!d.running && d.done) {
         clearInterval(timer);
         ov.classList.remove('active');
@@ -1255,8 +1270,19 @@ async function refreshScan(filename) {
           applySort();
           loadScores(true);
         }
+      } else if (_stallCount > 300) {
+        clearInterval(timer);
+        ov.classList.remove('active');
+        alert('扫描超时（进度停滞超过4分钟），请重试');
       }
-    } catch(e) {}
+    } catch(e) {
+      _pollErrors++;
+      if (_pollErrors > 5) {
+        clearInterval(timer);
+        ov.classList.remove('active');
+        alert('扫描状态查询异常: ' + e.message);
+      }
+    }
   }, 800);
 }
 

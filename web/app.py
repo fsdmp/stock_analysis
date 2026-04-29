@@ -12,6 +12,20 @@ from flask import Flask, jsonify, request, send_from_directory, session, redirec
 import pandas as pd
 import numpy as np
 import pyarrow.parquet as pq
+import math
+
+
+def _safe_float(val, default=0.0, precision=2):
+    """Convert value to float, returning default if NaN/None."""
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return round(default, precision)
+    try:
+        f = float(val)
+        if math.isnan(f):
+            return round(default, precision)
+        return round(f, precision)
+    except (TypeError, ValueError):
+        return round(default, precision)
 
 from stock_data.bs_manager import bs_shutdown
 
@@ -24,6 +38,27 @@ STOCK_NAMES_CACHE = CACHE_DIR / "stock_names.json"
 WATCHLIST_FILE = CACHE_DIR / "watchlist.json"
 app = Flask(__name__, static_folder="static", static_url_path="")
 app.secret_key = "fsdm-stock-analysis-2026"
+app.json.ensure_ascii = False
+
+# Sanitize NaN/Infinity in JSON output (invalid JSON values → None)
+def _sanitize_nan(obj):
+    """Recursively replace float NaN/Infinity with None."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_nan(v) for v in obj]
+    return obj
+
+_original_dumps = app.json.dumps
+
+def _safe_dumps(obj, **kwargs):
+    return _original_dumps(_sanitize_nan(obj), **kwargs)
+
+app.json.dumps = _safe_dumps
 
 # Fixed credentials
 _CREDENTIALS = {"fsdm": "fsdm00001"}
@@ -111,8 +146,8 @@ def build_stock_index():
             _stock_index[f.stem] = {
                 "code": f.stem,
                 "name": _stock_names.get(f.stem, ""),
-                "close": round(float(last_batch.column("close")[last_idx].as_py()), 2),
-                "pct_change": round(float(last_batch.column("pct_change")[last_idx].as_py() or 0), 2),
+                "close": _safe_float(last_batch.column("close")[last_idx].as_py()),
+                "pct_change": _safe_float(last_batch.column("pct_change")[last_idx].as_py(), 0),
                 "date": str(pd.Timestamp(last_batch.column("date")[last_idx].as_py()).date()),
             }
         except Exception:
@@ -581,7 +616,7 @@ def api_score(code):
     result = calc_score(df)
     result["code"] = code
     result["name"] = _stock_names.get(code, "")
-    result["close"] = round(float(df["close"].iloc[-1]), 2)
+    result["close"] = _safe_float(df["close"].iloc[-1])
     return jsonify(result)
 
 
@@ -671,8 +706,8 @@ def api_batch_score():
             result = calc_score(df)
             result["code"] = code
             result["name"] = _stock_names.get(code, "")
-            result["close"] = round(float(df["close"].iloc[-1]), 2)
-            result["pct_change"] = round(float(df["pct_change"].iloc[-1] or 0), 2)
+            result["close"] = _safe_float(df["close"].iloc[-1])
+            result["pct_change"] = _safe_float(df["pct_change"].iloc[-1], 0)
             results.append(result)
         except Exception as e:
             results.append({
@@ -707,110 +742,114 @@ def api_full_scan():
             "message": "正在扫描...",
         })
 
-        files = sorted(DATA_DIR.glob("*.parquet"))
-        # Pre-filter: skip stocks with close > max_price
-        files = [f for f in files if _stock_index.get(f.stem, {}).get("close", 0) <= max_price]
-        _score_scan_status["total"] = len(files)
+        try:
+            files = sorted(DATA_DIR.glob("*.parquet"))
+            # Pre-filter: skip stocks with close > max_price
+            files = [f for f in files if _stock_index.get(f.stem, {}).get("close", 0) <= max_price]
+            _score_scan_status["total"] = len(files)
 
-        from stock_data.scoring import calc_score
+            from stock_data.scoring import calc_score
 
-        _scan_cols = [
-            "date", "open", "close", "high", "low", "volume",
-            "pct_change", "turnover",
-            "ma5", "ma7", "ma10", "ma20",
-            "vwma5", "vwma10", "vwma20",
-            "bb_upper", "bb_middle", "bb_lower", "bb_bandwidth",
-            "macd_dif", "macd_dea", "macd_hist",
-            "kdj_k", "kdj_d", "kdj_j",
-        ]
+            _scan_cols = [
+                "date", "open", "close", "high", "low", "volume",
+                "pct_change", "turnover",
+                "ma5", "ma7", "ma10", "ma20",
+                "vwma5", "vwma10", "vwma20",
+                "bb_upper", "bb_middle", "bb_lower", "bb_bandwidth",
+                "macd_dif", "macd_dea", "macd_hist",
+                "kdj_k", "kdj_d", "kdj_j",
+            ]
 
-        def _score_one(f):
-            code = f.stem
-            try:
-                pf = pq.ParquetFile(f)
-                total_rows = pf.metadata.num_rows
-                if total_rows < 30:
-                    return None
-                available = set(pf.schema.names)
-                cols = [c for c in _scan_cols if c in available]
-                tail = min(total_rows, 150)
-                df = pd.read_parquet(f, columns=cols).iloc[-tail:].reset_index(drop=True)
-                if len(df) < 30:
-                    return None
-                result = calc_score(df)
-                result["code"] = code
-                result["name"] = _stock_names.get(code, "")
-                result["close"] = round(float(df["close"].iloc[-1]), 2)
-                result["pct_change"] = round(float(df["pct_change"].iloc[-1] or 0), 2)
-                result["data_mtime"] = f.stat().st_mtime
-                return result
-            except Exception:
-                pass
-            return None
-
-        def _score_one_timeout(f, timeout=30):
-            """Run _score_one with a per-stock timeout."""
-            import queue
-            q = queue.Queue()
-
-            def _worker():
+            def _score_one(f):
+                code = f.stem
                 try:
-                    q.put(_score_one(f))
+                    pf = pq.ParquetFile(f)
+                    total_rows = pf.metadata.num_rows
+                    if total_rows < 30:
+                        return None
+                    available = set(pf.schema.names)
+                    cols = [c for c in _scan_cols if c in available]
+                    tail = min(total_rows, 150)
+                    df = pd.read_parquet(f, columns=cols).iloc[-tail:].reset_index(drop=True)
+                    if len(df) < 30:
+                        return None
+                    result = calc_score(df)
+                    result["code"] = code
+                    result["name"] = _stock_names.get(code, "")
+                    result["close"] = _safe_float(df["close"].iloc[-1])
+                    result["pct_change"] = _safe_float(df["pct_change"].iloc[-1], 0)
+                    result["data_mtime"] = f.stat().st_mtime
+                    return result
                 except Exception:
-                    q.put(None)
-
-            t = threading.Thread(target=_worker, daemon=True)
-            t.start()
-            t.join(timeout=timeout)
-            if t.is_alive():
-                print(f"[WARN] {f.stem} timed out after {timeout}s, skipping")
+                    pass
                 return None
-            return q.get_nowait()
 
-        all_results = []
-        for i, f in enumerate(files):
-            _score_scan_status["current"] = i + 1
-            _score_scan_status["code"] = f.stem
-            try:
-                r = _score_one_timeout(f)
-                if r:
-                    all_results.append(r)
-            except Exception:
-                pass
+            def _score_one_timeout(f, timeout=30):
+                """Run _score_one with a per-stock timeout."""
+                import queue
+                q = queue.Queue()
 
-        # Sort by total score and save to disk
-        all_results.sort(key=lambda x: x.get("total", 0), reverse=True)
-        _score_scan_status["results"] = all_results
+                def _worker():
+                    try:
+                        q.put(_score_one(f))
+                    except Exception:
+                        q.put(None)
 
-        # Save to parquet file — serialize 'dimensions' as JSON string
-        SCORE_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        flat_results = []
-        for r in all_results:
-            fr = {}
-            for k, v in r.items():
-                if k == "dimensions":
-                    fr[k] = json.dumps(v, ensure_ascii=False)
-                else:
-                    fr[k] = v
-            flat_results.append(fr)
-        result_df = pd.DataFrame(flat_results)
-        result_file = SCORE_RESULTS_DIR / "latest.parquet"
-        result_df.to_parquet(result_file, index=False)
+                t = threading.Thread(target=_worker, daemon=True)
+                t.start()
+                t.join(timeout=timeout)
+                if t.is_alive():
+                    print(f"[WARN] {f.stem} timed out after {timeout}s, skipping")
+                    return None
+                return q.get_nowait()
 
-        # Also save a summary JSON
-        summary_file = SCORE_RESULTS_DIR / "summary.json"
-        with open(summary_file, "w", encoding="utf-8") as f:
-            json.dump({
-                "scan_time": datetime.now().isoformat(timespec="seconds"),
-                "total_stocks": len(all_results),
-                "high_score_count": len([r for r in all_results if r["total"] >= min_score]),
-                "min_score_filter": min_score,
-            }, f, ensure_ascii=False)
+            all_results = []
+            for i, f in enumerate(files):
+                _score_scan_status["current"] = i + 1
+                _score_scan_status["code"] = f.stem
+                try:
+                    r = _score_one_timeout(f)
+                    if r:
+                        all_results.append(r)
+                except Exception:
+                    pass
 
-        _score_scan_status["running"] = False
-        _score_scan_status["done"] = True
-        _score_scan_status["_saved"] = True
-        _score_scan_status["message"] = f"扫描完成，共 {len(all_results)} 只股票，其中 {len([r for r in all_results if r['total'] >= min_score])} 只评分≥{min_score}"
+            # Sort by total score and save to disk
+            all_results.sort(key=lambda x: x.get("total", 0), reverse=True)
+            _score_scan_status["results"] = all_results
+
+            # Save to parquet file — serialize 'dimensions' as JSON string
+            SCORE_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+            flat_results = []
+            for r in all_results:
+                fr = {}
+                for k, v in r.items():
+                    if k == "dimensions":
+                        fr[k] = json.dumps(v, ensure_ascii=False)
+                    else:
+                        fr[k] = v
+                flat_results.append(fr)
+            result_df = pd.DataFrame(flat_results)
+            result_file = SCORE_RESULTS_DIR / "latest.parquet"
+            result_df.to_parquet(result_file, index=False)
+
+            # Also save a summary JSON
+            summary_file = SCORE_RESULTS_DIR / "summary.json"
+            with open(summary_file, "w", encoding="utf-8") as f:
+                json.dump({
+                    "scan_time": datetime.now().isoformat(timespec="seconds"),
+                    "total_stocks": len(all_results),
+                    "high_score_count": len([r for r in all_results if r["total"] >= min_score]),
+                    "min_score_filter": min_score,
+                }, f, ensure_ascii=False)
+
+            _score_scan_status["message"] = f"扫描完成，共 {len(all_results)} 只股票，其中 {len([r for r in all_results if r['total'] >= min_score])} 只评分≥{min_score}"
+            _score_scan_status["_saved"] = True
+        except Exception as e:
+            _score_scan_status["message"] = f"评分扫描出错: {e}"
+        finally:
+            _score_scan_status["running"] = False
+            _score_scan_status["done"] = True
 
     t = threading.Thread(target=run_scan, daemon=True)
     t.start()
@@ -998,8 +1037,8 @@ def api_score_refresh():
                 result = calc_score(df)
                 result["code"] = code
                 result["name"] = _stock_names.get(code, "")
-                result["close"] = round(float(df["close"].iloc[-1]), 2)
-                result["pct_change"] = round(float(df["pct_change"].iloc[-1] or 0), 2)
+                result["close"] = _safe_float(df["close"].iloc[-1])
+                result["pct_change"] = _safe_float(df["pct_change"].iloc[-1], 0)
                 result["data_mtime"] = current_mtime
                 return result
             except Exception:
@@ -1126,52 +1165,56 @@ def api_strategy_scan():
             "message": "正在扫描...",
         })
 
-        # Determine required columns for pruning
-        req_cols = engine.get_required_columns()
+        try:
+            # Determine required columns for pruning
+            req_cols = engine.get_required_columns()
 
-        files = sorted(DATA_DIR.glob("*.parquet"))
-        _strategy_scan_status["total"] = len(files)
+            files = sorted(DATA_DIR.glob("*.parquet"))
+            _strategy_scan_status["total"] = len(files)
 
-        def _scan_one(f):
-            code = f.stem
-            try:
-                pf = pq.ParquetFile(f)
-                total_rows = pf.metadata.num_rows
-                if total_rows < 30:
-                    return None
-                available = set(pf.schema.names)
-                cols = [c for c in req_cols if c in available]
-                tail = min(total_rows, 200)
-                df = pd.read_parquet(f, columns=cols).iloc[-tail:].reset_index(drop=True)
-                if len(df) < 30:
-                    return None
-                stock_name = _stock_names.get(code, "")
-                if engine.evaluate(df, code, stock_name):
-                    return {
-                        "code": code,
-                        "name": stock_name,
-                        "close": round(float(df["close"].iloc[-1]), 2),
-                        "pct_change": round(float(df["pct_change"].iloc[-1] or 0), 2),
-                    }
-            except Exception:
-                pass
-            return None
+            def _scan_one(f):
+                code = f.stem
+                try:
+                    pf = pq.ParquetFile(f)
+                    total_rows = pf.metadata.num_rows
+                    if total_rows < 30:
+                        return None
+                    available = set(pf.schema.names)
+                    cols = [c for c in req_cols if c in available]
+                    tail = min(total_rows, 200)
+                    df = pd.read_parquet(f, columns=cols).iloc[-tail:].reset_index(drop=True)
+                    if len(df) < 30:
+                        return None
+                    stock_name = _stock_names.get(code, "")
+                    if engine.evaluate(df, code, stock_name):
+                        return {
+                            "code": code,
+                            "name": stock_name,
+                            "close": _safe_float(df["close"].iloc[-1]),
+                            "pct_change": _safe_float(df["pct_change"].iloc[-1], 0),
+                        }
+                except Exception:
+                    pass
+                return None
 
-        for i, f in enumerate(files):
-            _strategy_scan_status["current"] = i + 1
-            _strategy_scan_status["code"] = f.stem
-            try:
-                r = _scan_one(f)
-                if r:
-                    _strategy_scan_status["results"].append(r)
-            except Exception:
-                pass
+            for i, f in enumerate(files):
+                _strategy_scan_status["current"] = i + 1
+                _strategy_scan_status["code"] = f.stem
+                try:
+                    r = _scan_one(f)
+                    if r:
+                        _strategy_scan_status["results"].append(r)
+                except Exception:
+                    pass
 
-        _strategy_scan_status["running"] = False
-        _strategy_scan_status["done"] = True
-        _strategy_scan_status["message"] = (
-            f"扫描完成，{len(_strategy_scan_status['results'])} 只股票匹配策略"
-        )
+            _strategy_scan_status["message"] = (
+                f"扫描完成，{len(_strategy_scan_status['results'])} 只股票匹配策略"
+            )
+        except Exception as e:
+            _strategy_scan_status["message"] = f"扫描出错: {e}"
+        finally:
+            _strategy_scan_status["running"] = False
+            _strategy_scan_status["done"] = True
 
     t = threading.Thread(target=run_strategy_scan, daemon=True)
     t.start()
@@ -1525,47 +1568,49 @@ def api_backtest():
             "trades": [], "report": None,
         })
 
-        files = sorted(DATA_DIR.glob("*.parquet"))
-        codes = [f.stem for f in files]
+        try:
+            files = sorted(DATA_DIR.glob("*.parquet"))
+            codes = [f.stem for f in files]
 
-        if sample_size and len(codes) > sample_size:
-            np.random.seed(42)
-            codes = list(np.random.choice(codes, min(sample_size, len(codes)), replace=False))
+            if sample_size and len(codes) > sample_size:
+                np.random.seed(42)
+                codes = list(np.random.choice(codes, min(sample_size, len(codes)), replace=False))
 
-        _backtest_status["total"] = len(codes)
-        t0 = time.time()
-        all_trades = []
-        error_count = 0
+            _backtest_status["total"] = len(codes)
+            t0 = time.time()
+            all_trades = []
+            error_count = 0
 
-        for i, code in enumerate(codes):
-            _backtest_status["current"] = i + 1
-            _backtest_status["message"] = f"回测中 {i+1}/{len(codes)} - {code}"
-            try:
-                result = _backtest_single_stock(
-                    code, date_start, date_end,
-                    buy_cond, sell_cond,
-                    buy_price_type, sell_price_type,
-                    price_min, price_max,
-                    max_hold_days,
-                )
-                if result:
-                    all_trades.extend(result)
-            except Exception as e:
-                error_count += 1
-                if error_count <= 3:
-                    traceback.print_exc()
+            for i, code in enumerate(codes):
+                _backtest_status["current"] = i + 1
+                _backtest_status["message"] = f"回测中 {i+1}/{len(codes)} - {code}"
+                try:
+                    result = _backtest_single_stock(
+                        code, date_start, date_end,
+                        buy_cond, sell_cond,
+                        buy_price_type, sell_price_type,
+                        price_min, price_max,
+                        max_hold_days,
+                    )
+                    if result:
+                        all_trades.extend(result)
+                except Exception as e:
+                    error_count += 1
+                    if error_count <= 3:
+                        traceback.print_exc()
 
-        elapsed = time.time() - t0
-        report = _build_backtest_report(all_trades, len(codes), elapsed)
+            elapsed = time.time() - t0
+            report = _build_backtest_report(all_trades, len(codes), elapsed)
 
-        _backtest_status.update({
-            "running": False,
-            "done": True,
-            "message": f"回测完成，共 {len(all_trades)} 笔交易" + (f"（{error_count}只出错）" if error_count else ""),
-            "trades": all_trades,
-            "report": report,
-        })
-        print(f"[backtest] finished: {len(all_trades)} trades, {len(codes)} stocks, {elapsed:.1f}s, report={report is not None}")
+            _backtest_status["message"] = f"回测完成，共 {len(all_trades)} 笔交易" + (f"（{error_count}只出错）" if error_count else "")
+            _backtest_status["trades"] = all_trades
+            _backtest_status["report"] = report
+            print(f"[backtest] finished: {len(all_trades)} trades, {len(codes)} stocks, {elapsed:.1f}s, report={report is not None}")
+        except Exception as e:
+            _backtest_status["message"] = f"回测出错: {e}"
+        finally:
+            _backtest_status["running"] = False
+            _backtest_status["done"] = True
 
     t = threading.Thread(target=run_backtest, daemon=True)
     t.start()
@@ -1695,4 +1740,4 @@ if __name__ == "__main__":
     build_stock_index()
     print("Starting A-Share Stock Viewer...")
     print("Open http://localhost:8888 in your browser")
-    app.run(host="0.0.0.0", port=8888, debug=True)
+    app.run(host="0.0.0.0", port=8888, debug=False, threaded=True)
