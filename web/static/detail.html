@@ -1227,13 +1227,13 @@ function renderScorePanel(data) {
     const s = dim.score;
     // Dimension bar color: use gradient from score value
     let barColor;
-    if (s >= 5) barColor = '#e74c3c';
-    else if (s >= 3) barColor = '#f39c12';
-    else if (s > 0) barColor = '#f1c40f';
-    else if (s === 0) barColor = '#555';
-    else if (s >= -3) barColor = '#2ecc71';
-    else if (s >= -5) barColor = '#e67e22';
-    else barColor = '#ff4757';
+    if (s >= 5) barColor = '#e74c3c';       // 强多 - 红
+    else if (s >= 3) barColor = '#f39c12';  // 偏多 - 橙
+    else if (s > 0) barColor = '#f1c40f';   // 微多 - 黄
+    else if (s === 0) barColor = '#555';     // 中性 - 灰
+    else if (s >= -3) barColor = '#2ecc71';  // 微空 - 浅绿
+    else if (s >= -5) barColor = '#27ae60';  // 偏空 - 绿
+    else barColor = '#1e8449';               // 强空 - 深绿
 
     const sign = s > 0 ? '+' : '';
     const barW = Math.abs(s) / 10 * 50; // half-width: 0-50%
