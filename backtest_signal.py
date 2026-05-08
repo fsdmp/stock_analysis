@@ -290,9 +290,92 @@ def print_report(all_trades: list[dict], n_stocks: int, n_days: int, elapsed: fl
     # 年化估算
     years = (pd.Timestamp(DATE_END) - pd.Timestamp(DATE_START)).days / 365
     ann_ret = (1 + compound) ** (1 / years) - 1 if years > 0 else 0
-    print(f"  复合收益率(连乘): {compound * 100:.2f}%")
+    print(f"  理论复合收益率(连乘,无资金约束): {compound * 100:.2f}%")
     print(f"  估算年化: {ann_ret * 100:.2f}%")
+
+    # === 资金池模拟 ===
+    print(f"\n{'─' * 40}")
+    print("资金池模拟 (10万初始, 最多同时持仓3只):")
+    portfolio = _simulate_portfolio(trades_list, initial_capital=100000, max_positions=3)
+    print(f"  实际成交: {portfolio['trades_executed']} / {total_trades} 笔信号")
+    print(f"  最终资金: {portfolio['final_capital']:,.2f}")
+    print(f"  真实总收益: {portfolio['total_return_pct']:+.2f}%")
+    print(f"  最大回撤: -{portfolio['max_drawdown_pct']:.2f}%")
+    if years > 0 and portfolio['total_return_pct'] > -100:
+        real_ann = (1 + portfolio['total_return_pct'] / 100) ** (1 / years) - 1
+        print(f"  真实年化收益: {real_ann * 100:+.2f}%")
+
     print("=" * 80)
+
+
+def _simulate_portfolio(all_trades, initial_capital=100000, max_positions=3):
+    """Simulate a realistic portfolio with capital constraints."""
+    if not all_trades:
+        return {"final_capital": initial_capital, "total_return_pct": 0,
+                "max_drawdown_pct": 0, "trades_executed": 0, "trade_log": []}
+
+    df = pd.DataFrame(all_trades)
+    df["buy_dt"] = pd.to_datetime(df["buy_date"])
+    df["sell_dt"] = pd.to_datetime(df["sell_date"])
+    df = df.sort_values("buy_dt").reset_index(drop=True)
+
+    capital = float(initial_capital)
+    peak_capital = capital
+    max_drawdown = 0.0
+    active = []
+    trade_log = []
+
+    buy_events = [{"dt": row["buy_dt"], "idx": idx, "type": "buy", "row": row}
+                  for idx, row in df.iterrows()]
+    sell_events = [{"dt": row["sell_dt"], "idx": idx, "type": "sell", "row": row}
+                   for idx, row in df.iterrows()]
+
+    all_events = buy_events + sell_events
+    all_events.sort(key=lambda e: (e["dt"], 0 if e["type"] == "sell" else 1))
+
+    occupied_slots = set()
+
+    for event in all_events:
+        row = event["row"]
+        if event["type"] == "buy":
+            if len(occupied_slots) < max_positions:
+                occupied_slots.add(event["idx"])
+                alloc = capital / max_positions
+                active.append({"idx": event["idx"], "code": row["code"],
+                               "buy_date": row["buy_date"], "sell_date": row["sell_date"],
+                               "return_pct": row["return_pct"], "allocated": alloc})
+        elif event["type"] == "sell":
+            matching = [p for p in active if p["idx"] == event["idx"]]
+            if matching:
+                pos = matching[0]
+                pnl = pos["allocated"] * pos["return_pct"] / 100
+                capital += pnl
+                occupied_slots.discard(event["idx"])
+                active.remove(pos)
+                trade_log.append({"code": pos["code"], "pnl": round(pnl, 2),
+                                  "capital_after": round(capital, 2)})
+                if capital > peak_capital:
+                    peak_capital = capital
+                dd = (peak_capital - capital) / peak_capital * 100
+                if dd > max_drawdown:
+                    max_drawdown = dd
+
+    for pos in active:
+        pnl = pos["allocated"] * pos["return_pct"] / 100
+        capital += pnl
+        trade_log.append({"code": pos["code"], "pnl": round(pnl, 2),
+                          "capital_after": round(capital, 2)})
+        if capital > peak_capital:
+            peak_capital = capital
+        dd = (peak_capital - capital) / peak_capital * 100
+        if dd > max_drawdown:
+            max_drawdown = dd
+
+    total_return = (capital - initial_capital) / initial_capital * 100
+    return {"final_capital": round(capital, 2), "initial_capital": initial_capital,
+            "total_return_pct": round(total_return, 2),
+            "max_drawdown_pct": round(max_drawdown, 2),
+            "trades_executed": len(trade_log), "trade_log": trade_log}
 
 
 def main():

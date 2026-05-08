@@ -209,6 +209,26 @@ body {
 .btn-cancel:hover { border-color: #555; color: #ccc; }
 .btn-confirm { background: #e94560; border: none; color: #fff; }
 .btn-confirm:hover { background: #c73850; }
+
+/* Mobile */
+@media (max-width: 768px) {
+  .nav { padding: 10px 16px; gap: 12px; }
+  .layout { flex-direction: column; }
+  .sidebar {
+    width: 100%; min-width: unset; max-height: 40vh;
+    border-right: none; border-bottom: 1px solid #0f3460;
+  }
+  .main-content { padding: 16px; }
+  .content-header { flex-wrap: wrap; gap: 6px; }
+  .add-input { max-width: 100%; }
+  .search-dd { width: 100%; max-width: 100%; }
+  .stock-table { font-size: 12px; }
+  .stock-table th, .stock-table td { padding: 8px 6px; font-size: 12px; white-space: nowrap; }
+  .stock-table th:nth-child(4), .stock-table td:nth-child(4) { display: none; }
+  .act-btns { gap: 4px; }
+  .act-btn { padding: 3px 6px; font-size: 11px; }
+  .rename-box { width: 92vw; padding: 20px; }
+}
 </style>
 </head>
 <body>

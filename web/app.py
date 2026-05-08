@@ -1320,6 +1320,7 @@ def _backtest_single_stock(code, date_start, date_end,
     holding = False
     buy_price = 0
     buy_date = None
+    buy_score = 0
 
     WINDOW_SIZE = 150
     START_OFFSET = 30
@@ -1365,6 +1366,7 @@ def _backtest_single_stock(code, date_start, date_end,
                     "sell_price": round(sell_price, 4),
                     "hold_days": hold_days,
                     "return_pct": round(ret, 2),
+                    "buy_score": buy_score,
                     "exit_reason": "end_of_data",
                 })
                 holding = False
@@ -1381,6 +1383,7 @@ def _backtest_single_stock(code, date_start, date_end,
                 if _check_condition(bc_type, bc_op, bc_val, score, action):
                     buy_price = float(next_row["close" if buy_price_type == "close" else "open"])
                     buy_date = trade_dates[t + 1]
+                    buy_score = score
                     holding = True
         else:
             # Max hold days: force sell if exceeded
@@ -1399,6 +1402,7 @@ def _backtest_single_stock(code, date_start, date_end,
                         "sell_price": round(sell_price, 4),
                         "hold_days": hold_days,
                         "return_pct": round(ret, 2),
+                        "buy_score": buy_score,
                         "exit_reason": "max_hold",
                     })
                     holding = False
@@ -1422,6 +1426,7 @@ def _backtest_single_stock(code, date_start, date_end,
                         "sell_price": round(sell_price, 4),
                         "hold_days": hold_days,
                         "return_pct": round(ret, 2),
+                        "buy_score": buy_score,
                         "exit_reason": "signal",
                     })
                     holding = False
@@ -1440,13 +1445,160 @@ def _backtest_single_stock(code, date_start, date_end,
             "sell_price": round(sell_price, 4),
             "hold_days": hold_days,
             "return_pct": round(ret, 2),
+            "buy_score": buy_score,
             "exit_reason": "end_of_data",
         })
 
     return trades if trades else None
 
 
-def _build_backtest_report(all_trades, n_stocks, elapsed):
+def _simulate_portfolio(all_trades, initial_capital=100000, max_positions=3,
+                        pick_strategy="fifo"):
+    """Simulate a realistic portfolio with capital constraints.
+
+    Rules:
+    - Initial capital is split equally across max_positions slots
+    - Each slot can hold one stock at a time
+    - Buy signals are processed in chronological order
+    - A buy only executes if a free slot exists
+    - When multiple buy signals on the same day exceed free slots,
+      pick_strategy determines priority:
+        "fifo"       : original order (no reordering)
+        "score_desc" : higher buy_score first
+        "score_asc"  : lower buy_score first
+        "random"     : random shuffle
+    - When a sell completes, the slot is freed and capital recycled
+
+    Returns dict with: final_capital, total_return_pct, max_drawdown_pct,
+                       trades_executed, trade_log
+    """
+    if not all_trades:
+        return {"final_capital": initial_capital, "total_return_pct": 0,
+                "max_drawdown_pct": 0, "trades_executed": 0, "trade_log": []}
+
+    import random as _random
+
+    df = pd.DataFrame(all_trades)
+    # Parse dates and sort by buy_date
+    df["buy_dt"] = pd.to_datetime(df["buy_date"])
+    df["sell_dt"] = pd.to_datetime(df["sell_date"])
+    df = df.sort_values("buy_dt").reset_index(drop=True)
+
+    # Ensure buy_score column exists (default 0 for backward compat)
+    if "buy_score" not in df.columns:
+        df["buy_score"] = 0
+
+    capital = float(initial_capital)
+    peak_capital = capital
+    max_drawdown = 0.0
+
+    active = []       # list of active position dicts
+    trade_log = []
+    occupied_slots = set()  # set of df index
+
+    # Collect all unique dates where events happen
+    # Group buy signals by date, then apply pick_strategy within each day
+    buy_groups = df.groupby("buy_dt")
+    sell_map = {}  # idx -> sell_dt
+    for idx, row in df.iterrows():
+        sell_map[idx] = row["sell_dt"]
+
+    # Build sorted list of all unique event dates
+    all_dates = sorted(set(df["buy_dt"].tolist() + df["sell_dt"].tolist()))
+
+    for dt in all_dates:
+        # 1. Process sells on this date first (free up slots)
+        sells_today = [idx for idx, sd in sell_map.items() if sd == dt
+                       and idx in occupied_slots]
+        for idx in sells_today:
+            pos = next((p for p in active if p["idx"] == idx), None)
+            if pos:
+                pnl = pos["allocated"] * pos["return_pct"] / 100
+                capital += pnl
+                occupied_slots.discard(idx)
+                active.remove(pos)
+                trade_log.append({
+                    "code": pos["code"],
+                    "buy_date": pos["buy_date"],
+                    "sell_date": pos["sell_date"],
+                    "return_pct": pos["return_pct"],
+                    "allocated": round(pos["allocated"], 2),
+                    "pnl": round(pnl, 2),
+                    "capital_after": round(capital, 2),
+                })
+                if capital > peak_capital:
+                    peak_capital = capital
+                dd = (peak_capital - capital) / peak_capital * 100
+                if dd > max_drawdown:
+                    max_drawdown = dd
+
+        # 2. Process buys on this date (apply pick_strategy for same-day signals)
+        if dt in buy_groups.groups:
+            buy_rows = buy_groups.get_group(dt)
+            buy_indices = buy_rows.index.tolist()
+
+            # Apply pick_strategy to reorder same-day buy candidates
+            if pick_strategy == "score_desc":
+                buy_indices = sorted(buy_indices,
+                                     key=lambda i: df.loc[i, "buy_score"],
+                                     reverse=True)
+            elif pick_strategy == "score_asc":
+                buy_indices = sorted(buy_indices,
+                                     key=lambda i: df.loc[i, "buy_score"])
+            elif pick_strategy == "random":
+                _random.shuffle(buy_indices)
+            # "fifo": keep original order (already sorted by buy_dt then index)
+
+            free_slots = max_positions - len(occupied_slots)
+            for idx in buy_indices[:free_slots]:
+                row = df.loc[idx]
+                occupied_slots.add(idx)
+                alloc = capital / max_positions
+                active.append({
+                    "idx": idx,
+                    "code": row["code"],
+                    "buy_date": row["buy_date"],
+                    "sell_date": row["sell_date"],
+                    "buy_price": row["buy_price"],
+                    "sell_price": row["sell_price"],
+                    "return_pct": row["return_pct"],
+                    "allocated": alloc,
+                })
+
+    # Close any remaining active positions at end
+    for pos in active:
+        pnl = pos["allocated"] * pos["return_pct"] / 100
+        capital += pnl
+        trade_log.append({
+            "code": pos["code"],
+            "buy_date": pos["buy_date"],
+            "sell_date": pos["sell_date"],
+            "return_pct": pos["return_pct"],
+            "allocated": round(pos["allocated"], 2),
+            "pnl": round(pnl, 2),
+            "capital_after": round(capital, 2),
+        })
+        if capital > peak_capital:
+            peak_capital = capital
+        dd = (peak_capital - capital) / peak_capital * 100
+        if dd > max_drawdown:
+            max_drawdown = dd
+
+    total_return = (capital - initial_capital) / initial_capital * 100
+
+    return {
+        "final_capital": round(capital, 2),
+        "initial_capital": initial_capital,
+        "total_return_pct": round(total_return, 2),
+        "max_drawdown_pct": round(max_drawdown, 2),
+        "trades_executed": len(trade_log),
+        "trade_log": trade_log,
+    }
+
+
+def _build_backtest_report(all_trades, n_stocks, elapsed,
+                           initial_capital=100000, max_positions=3,
+                           pick_strategy="fifo"):
     """Build backtest statistics report."""
     if not all_trades:
         return {"summary": "无交易记录", "total_trades": 0}
@@ -1461,6 +1613,12 @@ def _build_backtest_report(all_trades, n_stocks, elapsed):
     avg_hold = df["hold_days"].mean()
     median_hold = df["hold_days"].median()
     compound = (1 + df["return_pct"] / 100).prod() - 1
+
+    # Realistic portfolio simulation
+    portfolio = _simulate_portfolio(all_trades, initial_capital=initial_capital,
+                                    max_positions=max_positions,
+                                    pick_strategy=pick_strategy)
+    portfolio["max_positions"] = max_positions  # include for frontend display
 
     avg_win = df[df["return_pct"] > 0]["return_pct"].mean() if win_trades > 0 else 0
     avg_loss = abs(df[df["return_pct"] <= 0]["return_pct"].mean()) if loss_trades > 0 else 0
@@ -1525,6 +1683,8 @@ def _build_backtest_report(all_trades, n_stocks, elapsed):
         "bottom5": bot5,
         "n_stocks": n_stocks,
         "elapsed": round(elapsed, 1),
+        # Realistic portfolio simulation results
+        "portfolio": portfolio,
     }
 
 
@@ -1546,6 +1706,9 @@ def api_backtest():
     sell_price_type = data.get("sell_price", "open")
     sample_size = data.get("sample_size", 200)
     max_hold_days = data.get("max_hold_days")  # e.g. 10, null=unlimited
+    initial_capital = float(data.get("initial_capital", 100000))
+    max_positions = int(data.get("max_positions", 3))
+    pick_strategy = data.get("pick_strategy", "fifo")  # fifo, score_desc, score_asc, random
 
     if price_min is not None:
         price_min = float(price_min)
@@ -1556,7 +1719,8 @@ def api_backtest():
 
     print(f"[backtest] params: date={date_start}~{date_end}, buy={buy_cond}, sell={sell_cond}, "
           f"buy_price={buy_price_type}, sell_price={sell_price_type}, "
-          f"price={price_min}~{price_max}, sample={sample_size}, max_hold={max_hold_days}")
+          f"price={price_min}~{price_max}, sample={sample_size}, max_hold={max_hold_days}, "
+          f"capital={initial_capital}, max_pos={max_positions}, pick={pick_strategy}")
 
     def run_backtest():
         import time
@@ -1600,7 +1764,10 @@ def api_backtest():
                         traceback.print_exc()
 
             elapsed = time.time() - t0
-            report = _build_backtest_report(all_trades, len(codes), elapsed)
+            report = _build_backtest_report(all_trades, len(codes), elapsed,
+                                            initial_capital=initial_capital,
+                                            max_positions=max_positions,
+                                            pick_strategy=pick_strategy)
 
             _backtest_status["message"] = f"回测完成，共 {len(all_trades)} 笔交易" + (f"（{error_count}只出错）" if error_count else "")
             _backtest_status["trades"] = all_trades

@@ -281,13 +281,29 @@ body {
 .pg-info { font-size: 12px; color: #555; margin: 0 8px; }
 
 /* Responsive */
-@media (max-width: 640px) {
+@media (max-width: 768px) {
+  .nav { padding: 10px 16px; gap: 12px; }
   .container { padding: 16px; }
+  .input-card { padding: 16px; }
   .dim-grid { grid-template-columns: 1fr; }
-  .row { gap: 10px; }
+  .row { gap: 10px; padding: 12px 12px 12px 14px; }
   .row-score { font-size: 22px; }
-  .input-actions { flex-wrap: wrap; }
+  .row-main { gap: 8px; flex-wrap: wrap; }
+  .row-goto { display: none; }
+  .input-actions { flex-wrap: wrap; gap: 8px; }
   .hint { margin-left: 0; }
+  .row-name { font-size: 14px; }
+  .row-name .code { font-size: 11px; }
+  .row-sub { font-size: 11px; gap: 6px; }
+  .row-chips { gap: 3px; }
+  .chip { font-size: 9px; padding: 1px 5px; }
+  .tag-wrap { padding: 6px 8px; gap: 6px; }
+  .tag { font-size: 12px; padding: 4px 8px; }
+  .btn-go { padding: 8px 20px; font-size: 13px; }
+  .btn-clr { padding: 8px 16px; font-size: 13px; }
+  .ov-list { width: 100%; max-width: 92vw; }
+  .scan-divider { margin-bottom: 16px; }
+  .pg-btn { padding: 5px 8px; font-size: 12px; }
 }
 </style>
 </head>

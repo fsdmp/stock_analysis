@@ -160,6 +160,49 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
 .bt-table th { text-align: left; color: #555; padding: 6px 8px; border-bottom: 1px solid #0f3460; font-weight: 500; }
 .bt-table td { padding: 6px 8px; border-bottom: 1px solid rgba(15,52,96,.3); }
 .bt-table tr:hover td { background: rgba(15,52,96,.3); }
+.bt-portfolio { background: #f0f7ff; border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+.bt-portfolio-title { font-size: 14px; font-weight: 600; color: #2c3e50; margin-bottom: 10px; }
+.bt-portfolio-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.bt-pf-item { text-align: center; }
+.bt-pf-val { font-size: 18px; font-weight: 700; }
+.bt-pf-label { font-size: 11px; color: #888; }
+.bt-pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.bt-pair-grid-lg { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+/* Mobile */
+@media (max-width: 768px) {
+  .nav { padding: 10px 16px; gap: 10px; }
+  .main-layout { flex-direction: column; }
+  .sidebar {
+    width: 100%; min-width: unset; max-height: 35vh;
+    border-right: none; border-bottom: 1px solid #0f3460;
+  }
+  .content-header { padding: 12px 16px; flex-wrap: wrap; gap: 8px; }
+  .content-actions { flex-wrap: wrap; gap: 6px; }
+  .content-body { padding: 0 16px 16px; }
+  .res-table { font-size: 12px; }
+  .res-table th, .res-table td { padding: 8px 6px; font-size: 12px; }
+  .res-table th:nth-child(4), .res-table td:nth-child(4) { display: none; }
+  .editor { width: 100%; max-width: 95vw; padding: 16px; margin: 0 auto 20px; border-radius: 0; }
+  .ed-row { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .ed-label { width: auto; text-align: left; }
+  .ed-input { min-width: unset; width: 100%; }
+  .cond-item { padding: 8px 10px; gap: 6px; }
+  .add-cond { flex-wrap: wrap; }
+  .add-sel { flex: 1; min-width: 120px; }
+  .param-group { flex-wrap: wrap; }
+  .bt-summary { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .bt-card { padding: 10px; }
+  .bt-card-val { font-size: 18px; }
+  .editor-overlay { padding-top: 0; align-items: flex-start; }
+  .s-btn { padding: 5px 10px; font-size: 11px; }
+  .bt-portfolio { padding: 10px 12px; }
+  .bt-portfolio-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .bt-pf-val { font-size: 15px; }
+  .bt-pair-grid { gap: 8px; }
+  .bt-pair-grid-lg { grid-template-columns: 1fr; gap: 12px; }
+  .bt-table th, .bt-table td { padding: 4px 4px; font-size: 11px; }
+}
 </style>
 </head>
 <body>
@@ -316,6 +359,29 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
           <span class="p-chip on" data-v="open" onclick="toggleBtChip(this,'btSellPrice')">次日开盘价</span>
           <span class="p-chip" data-v="close" onclick="toggleBtChip(this,'btSellPrice')">次日收盘价</span>
         </div>
+      </div>
+    </div>
+    <div style="border-top:1px solid #0f3460;margin:12px 0;padding-top:12px">
+      <div style="font-size:12px;color:#888;margin-bottom:8px">资金模拟</div>
+      <div class="ed-row">
+        <span class="ed-label">初始资金</span>
+        <input class="param-sm" id="btCapital" type="number" value="100000" style="width:100px">
+        <span style="color:#555;font-size:11px">元</span>
+      </div>
+      <div class="ed-row">
+        <span class="ed-label">最大持仓</span>
+        <input class="param-sm" id="btMaxPos" type="number" value="3" min="1" max="20" style="width:72px">
+        <span style="color:#555;font-size:11px">只（同时最多持有几只股票）</span>
+      </div>
+      <div class="ed-row">
+        <span class="ed-label">选股策略</span>
+        <select class="add-sel" id="btPickStrategy" style="width:auto">
+          <option value="fifo">默认排序</option>
+          <option value="score_desc">评分从高到低</option>
+          <option value="score_asc">评分从低到高</option>
+          <option value="random">随机选择</option>
+        </select>
+        <span style="color:#555;font-size:11px">同日多信号时的优先级</span>
       </div>
     </div>
     <div class="ed-row">
@@ -1416,6 +1482,9 @@ async function startBacktest() {
     buy_price: _btBuyPrice,
     sell_price: _btSellPrice,
     sample_size: parseInt(document.getElementById('btSample').value) || 200,
+    initial_capital: parseFloat(document.getElementById('btCapital').value) || 100000,
+    max_positions: parseInt(document.getElementById('btMaxPos').value) || 3,
+    pick_strategy: document.getElementById('btPickStrategy').value,
   };
   const priceMin = document.getElementById('btPriceMin').value;
   const priceMax = document.getElementById('btPriceMax').value;
@@ -1463,6 +1532,24 @@ function showBtReport(r) {
   const retColor = r.avg_return >= 0 ? '#e74c3c' : '#2ecc71';
   const maxBar = Math.max(...(r.distribution||[]).map(d=>d.count), 1);
 
+  // Portfolio simulation section
+  let portfolioHTML = '';
+  if (r.portfolio) {
+    const p = r.portfolio;
+    const pRetColor = p.total_return_pct >= 0 ? '#e74c3c' : '#2ecc71';
+    const capLabel = (p.initial_capital / 10000).toFixed(p.initial_capital % 10000 === 0 ? 0 : 1);
+    portfolioHTML = `
+      <div class="bt-portfolio">
+        <div class="bt-portfolio-title">资金模拟 (${capLabel}万初始, 最多同时持仓${p.max_positions}只)</div>
+        <div class="bt-portfolio-grid">
+          <div class="bt-pf-item"><div class="bt-pf-val" style="color:${pRetColor}">${p.total_return_pct > 0 ? '+' : ''}${p.total_return_pct}%</div><div class="bt-pf-label">真实总收益</div></div>
+          <div class="bt-pf-item"><div class="bt-pf-val" style="color:#2c3e50">${p.final_capital ? p.final_capital.toLocaleString() : '-'}</div><div class="bt-pf-label">最终资金</div></div>
+          <div class="bt-pf-item"><div class="bt-pf-val" style="color:#e74c3c">-${p.max_drawdown_pct}%</div><div class="bt-pf-label">最大回撤</div></div>
+          <div class="bt-pf-item"><div class="bt-pf-val" style="color:#2c3e50">${p.trades_executed} / ${r.total_trades}</div><div class="bt-pf-label">实际成交 / 总信号</div></div>
+        </div>
+      </div>`;
+  }
+
   el.innerHTML = `
     <div class="bt-summary">
       <div class="bt-card"><div class="bt-card-val">${r.total_trades}</div><div class="bt-card-label">总交易次数</div></div>
@@ -1470,9 +1557,10 @@ function showBtReport(r) {
       <div class="bt-card"><div class="bt-card-val" style="color:${retColor}">${r.avg_return > 0 ? '+' : ''}${r.avg_return}%</div><div class="bt-card-label">平均收益</div></div>
       <div class="bt-card"><div class="bt-card-val">${r.profit_loss_ratio}</div><div class="bt-card-label">盈亏比 (均盈/均亏)</div></div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+    ${portfolioHTML}
+    <div class="bt-pair-grid">
       <div class="bt-card"><div class="bt-card-val" style="font-size:16px;color:#888">${r.avg_win > 0 ? '+' : ''}${r.avg_win}% / -${r.avg_loss}%</div><div class="bt-card-label">平均盈利 / 平均亏损</div></div>
-      <div class="bt-card"><div class="bt-card-val" style="font-size:16px;color:#888">${r.avg_hold_days}天</div><div class="bt-card-label">平均持仓天数 | 复合收益 ${r.compound_return}%</div></div>
+      <div class="bt-card"><div class="bt-card-val" style="font-size:16px;color:#888">${r.avg_hold_days}天</div><div class="bt-card-label">平均持仓天数 | 理论复合收益 ${r.compound_return}%</div></div>
     </div>
     <div class="bt-section">
       <div class="bt-section-title">收益分布</div>
@@ -1491,7 +1579,7 @@ function showBtReport(r) {
       <table class="bt-table"><thead><tr><th>月份</th><th>交易数</th><th>平均收益</th><th>累计收益</th></tr></thead>
       <tbody>${r.monthly.map(m => `<tr><td>${m.month}</td><td>${m.trades}</td><td style="color:${m.avg_return>=0?'#e74c3c':'#2ecc71'}">${m.avg_return>0?'+':''}${m.avg_return}%</td><td style="color:${m.total_return>=0?'#e74c3c':'#2ecc71'}">${m.total_return>0?'+':''}${m.total_return}%</td></tr>`).join('')}</tbody></table>
     </div>` : ''}
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div class="bt-pair-grid-lg">
       <div class="bt-section"><div class="bt-section-title">最佳交易 Top 5</div>
         <table class="bt-table"><thead><tr><th>代码</th><th>买入</th><th>卖出</th><th>天数</th><th>收益</th></tr></thead>
         <tbody>${(r.top5||[]).map(t => `<tr><td style="color:#3498db">${t.code}</td><td>${t.buy_date}</td><td>${t.sell_date}</td><td>${t.hold_days}</td><td class="up">+${t.return_pct}%</td></tr>`).join('')}</tbody></table>

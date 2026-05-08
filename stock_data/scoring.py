@@ -985,8 +985,11 @@ def _score_momentum(cols, n, trend):
     if n >= 4 and close[n - 4] > 0:
         c3 = (close[n - 1] / close[n - 4] - 1) * 100
         if trend >= 1:  # Uptrend: reward sustained momentum, penalize chasing
-            if c3 > 10:
-                score -= 2
+            if c3 > 15:
+                score -= 5
+                details.append(f"3日涨{c3:+.1f}%(极度过热)")
+            elif c3 > 10:
+                score -= 3
                 details.append(f"3日涨{c3:+.1f}%(严重过热)")
             elif c3 > 7:
                 score += 1
@@ -1370,28 +1373,49 @@ def _score_smart_money(cols, n, trend):
     if tr <= 0:
         return 0, "无波动"
 
-    # Long upper shadow
-    if us > body * 2 and us > ls * 2:
-        score -= 4 if trend >= 1 else 2
-        details.append("长上影线" + ("(高位抛压)" if trend >= 1 else "(诱多嫌疑)"))
+    # ── Shadow analysis (data-driven: 涨票上影线显著, 跌票下影线显著) ──
+    us_ratio = us / tr if tr > 0 else 0  # 上影线比率
+    ls_ratio = ls / tr if tr > 0 else 0  # 下影线比率
 
-    # Long lower shadow
-    if ls > body * 2 and ls > us * 2:
-        if trend >= 1:
-            score += 4
-            details.append("长下影线(支撑确认)")
-        elif trend <= -1:
-            score += 1
-            details.append("长下影线(抵抗)")
-        else:
-            score += 2
-            details.append("长下影线")
+    # Upper shadow: 适度上影线(0.25~0.55) = 向上试探有攻击力, 涨票均值0.38
+    if us_ratio >= 0.35:
+        score += 3 if trend >= 1 else 1
+        details.append("明显上影线(上攻试探)")
+    elif us_ratio >= 0.25:
+        score += 1
+        details.append("上影线(有攻击意愿)")
+    elif us_ratio < 0.10 and ls_ratio > 0.25:
+        score -= 1
+        details.append("几乎无上影(上攻乏力)")
 
-    # Doji
+    # Lower shadow: 长下影线(>0.40) = 盘中被砸抛压重, 跌票均值0.33
+    if ls_ratio >= 0.50:
+        score -= 3
+        details.append("长下影线(盘中抛压重)")
+    elif ls_ratio >= 0.35:
+        score -= 1
+        details.append("下影线偏长(有一定抛压)")
+    elif ls_ratio < 0.15 and us_ratio >= 0.25:
+        score += 1
+        details.append("短下影(抛压轻)")
+
+    # Doji - 十字星在高/低位含义不同
     if body / tr < 0.1:
         if trend >= 1:
-            score -= 2
-            details.append("十字星(上升受阻)")
+            # 检查是否在高位(10日区间>85%)
+            is_high = False
+            if n >= 11:
+                h10 = max(cols["high"][i] for i in range(n - 10, n))
+                l10 = min(cols["low"][i] for i in range(n - 10, n))
+                if h10 > l10:
+                    pos_10d = (cols["close"][n - 1] - l10) / (h10 - l10) * 100
+                    is_high = pos_10d > 85
+            if is_high:
+                score -= 4
+                details.append("高位十字星(见顶信号)")
+            else:
+                score -= 2
+                details.append("十字星(上升受阻)")
         elif trend <= -1:
             score += 2
             details.append("十字星(下跌减速)")
@@ -1533,6 +1557,103 @@ def _calc_atr(cols, n, period=14):
     return np.mean(trs) if trs else 0
 
 
+def _score_price_position(cols, n, trend):
+    """价格位置: 收盘价在近期高低区间的位置 + 距高点距离 + 5日振幅.
+
+    Data-driven findings (21 stocks, 区分度排序):
+      - price_pos_10d 区分度 1.00: 涨票82.7% vs 跌票91.6%
+      - dist_high_5d  区分度 0.99: 涨票-3.7% vs 跌票-1.7%
+      - range_5d      区分度 0.70: 涨票19.6% vs 跌票15.6%
+
+    核心规律: 价格不能紧贴近期最高点, 需要有回调空间;
+              活跃度(振幅)高的票更容易延续上涨.
+    """
+    score, details = 0, []
+    close = cols["close"]
+    high = cols["high"]
+    low = cols["low"]
+
+    # ── 1. 10日区间位置 (区分度 1.00) ────────────────────────────
+    if n >= 11:
+        h10 = max(high[i] for i in range(n - 10, n))
+        l10 = min(low[i] for i in range(n - 10, n))
+        cp = close[n - 1]
+
+        if h10 > l10:
+            pos_10d = (cp - l10) / (h10 - l10) * 100
+
+            if pos_10d >= 99:
+                # 就在10日最高点 → 极度追高
+                score -= 7
+                details.append(f"触及10日高点({pos_10d:.0f}%,极度追高)")
+            elif pos_10d > 95:
+                # 几乎在10日最高点 → 追高风险极大
+                score -= 4
+                details.append(f"贴近10日高点({pos_10d:.0f}%,追高风险)")
+            elif pos_10d > 90:
+                score -= 2
+                details.append(f"接近10日高点({pos_10d:.0f}%)")
+            elif pos_10d > 85:
+                score -= 1
+            elif 60 <= pos_10d <= 85:
+                # 最佳区间: 有上涨空间且不在低位
+                score += 3
+                details.append(f"10日区间适中({pos_10d:.0f}%)")
+            elif 40 <= pos_10d < 60:
+                score += 1
+                details.append(f"10日区间偏低({pos_10d:.0f}%)")
+            # < 40%: 过低, 可能趋势偏弱, 不加分
+
+    # ── 2. 距5日高点距离 (区分度 0.99) ───────────────────────────
+    if n >= 6:
+        h5 = max(high[i] for i in range(n - 5, n))
+        cp = close[n - 1]
+        if h5 > 0:
+            dist_high_5d = (cp - h5) / h5 * 100
+
+            if dist_high_5d > -0.5:
+                # 几乎就是5日最高点 → 追高
+                score -= 3
+                details.append(f"紧贴5日高点(距高点{dist_high_5d:+.1f}%)")
+            elif dist_high_5d > -1.5:
+                score -= 1
+            elif -5 <= dist_high_5d <= -2:
+                # 距高点2%~5%的回调 → 最佳买点区间
+                score += 3
+                details.append(f"距5日高点{dist_high_5d:+.1f}%(适度回调)")
+            elif -8 < dist_high_5d < -5:
+                score += 1
+                details.append(f"距5日高点{dist_high_5d:+.1f}%")
+            elif dist_high_5d <= -8:
+                # 回调过深
+                score -= 1
+
+    # ── 3. 5日振幅活跃度 (区分度 0.70) ───────────────────────────
+    if n >= 6:
+        h5 = max(high[i] for i in range(n - 5, n))
+        l5 = min(low[i] for i in range(n - 5, n))
+        if l5 > 0:
+            range_5d = (h5 - l5) / l5 * 100
+
+            if range_5d > 22:
+                # 非常活跃, 涨票均值19.6%
+                score += 2
+                details.append(f"5日振幅大({range_5d:.0f}%,活跃)")
+            elif range_5d > 15:
+                score += 1
+            elif range_5d < 8:
+                # 极度不活跃
+                score -= 2
+                details.append(f"5日振幅极小({range_5d:.0f}%,死水)")
+            elif range_5d < 12:
+                score -= 1
+
+    if not details:
+        details.append("价格位置正常")
+
+    return _clamp(score), "; ".join(details)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1567,21 +1688,22 @@ def calc_score(df: pd.DataFrame) -> dict:
     dim_raw = []
 
     scorers = [
-        ("短期动量", 18, _score_momentum, (cols, n, trend)),
-        ("MACD动能", 16, _score_macd, (cols, n, trend)),
-        ("量价配合", 14, _score_volume, (cols, n, trend)),
-        ("趋势确认", 12, _score_meta, (cols, n, dim_raw, trend)),
-        ("换手率", 11, _score_turnover, (cols, n, trend)),
-        ("支撑压力", 8, _score_sr, (cols, n, zones, trend)),
-        ("主力行为", 7, _score_smart_money, (cols, n, trend)),
-        ("MA趋势", 6, _score_ma_trend, (cols, n, trend)),
-        ("KDJ状态", 4, _score_kdj, (cols, n, trend)),
-        ("均线形态", 2, _score_squeeze, (cols, n, trend)),
-        ("背离信号", 2, _score_divergence, (cols, n, signals, trend)),
+        ("价格位置", 18, _score_price_position, (cols, n, trend)),     # r=+0.281 最强正相关，加大
+        ("短期动量", 10, _score_momentum, (cols, n, trend)),           # r=-0.127 略降
+        ("量价配合", 7, _score_volume, (cols, n, trend)),              # r=-0.225 负相关，降低
+        ("MACD动能", 5, _score_macd, (cols, n, trend)),                # r=-0.266 负相关，大幅降低
+        ("主力行为", 9, _score_smart_money, (cols, n, trend)),         # r=+0.017 保持
+        ("换手率", 4, _score_turnover, (cols, n, trend)),              # r=-0.292 最强负相关，大幅降低
+        ("MA趋势", 10, _score_ma_trend, (cols, n, trend)),            # r=+0.187 正相关，提升
+        ("支撑压力", 5, _score_sr, (cols, n, zones, trend)),          # r=+0.067 保持
+        ("KDJ状态", 3, _score_kdj, (cols, n, trend)),                 # r=-0.125 保持低权重
+        ("均线形态", 2, _score_squeeze, (cols, n, trend)),            # 保持
+        ("背离信号", 2, _score_divergence, (cols, n, signals, trend)),# 保持
+        ("趋势确认", 2, _score_meta, (cols, n, dim_raw, trend)),     # 保持
     ]
 
-    # 趋势确认(index 3)依赖 dim_raw，放最后执行
-    meta_idx = 3
+    # 趋势确认(最后一个)依赖 dim_raw，放最后执行
+    meta_idx = len(scorers) - 1
     for i in range(len(scorers)):
         if i == meta_idx:
             continue
