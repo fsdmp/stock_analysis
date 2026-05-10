@@ -293,7 +293,7 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
 
   /* Intraday modal - full screen on mobile */
   .intraday-box {
-    width: 100vw; height: 100vh; top: 0; left: 0; transform: none;
+    width: 100vw; height: 100vh; height: 100dvh; top: 0; left: 0; transform: none;
     border-radius: 0; border: none;
   }
   .intraday-header { padding: 6px 10px; flex-wrap: wrap; gap: 6px; }
@@ -945,6 +945,7 @@ function renderTimeline(data, refPrice) {
   const pctMax = maxDev / openPrice * 100;
 
   const _itl = _gL + 2;
+  const _iR = _isMobile ? 46 : _gR; // intraday needs right-side price axis
   intradayChart.setOption({
     backgroundColor:'#1a1a2e',
     animation:false,
@@ -959,7 +960,8 @@ function renderTimeline(data, refPrice) {
       trigger:'axis',
       axisPointer:{type:'line',lineStyle:{color:'#555',type:'dashed',width:1}},
       backgroundColor:'rgba(22,33,62,.95)',borderWidth:1,borderColor:'#2a2a4a',
-      padding:[6,10],textStyle:{color:'#e0e0e0',fontSize:12},
+      padding:_isMobile?[6,8]:[6,10],textStyle:{color:'#e0e0e0',fontSize:_isMobile?11:12},
+      confine:true,
       formatter:function(p){
         if(!p||!p.length)return'';
         const i=_intraIdx>=0&&_intraIdx<rows.length?_intraIdx:p[0].dataIndex, r=rows[i];
@@ -969,7 +971,7 @@ function renderTimeline(data, refPrice) {
         const s=pct>=0?'+':'';
         const lb='color:#555;font-size:11px;padding-right:4px';
         const vl=c=>`color:${c||'#bbb'}`;
-        return `<div style="font-size:12px;line-height:1.6;min-width:280px">
+        return `<div style="font-size:12px;line-height:1.6">
           <div style="padding-bottom:4px;border-bottom:1px solid #2a2a4a;margin-bottom:3px"><b>${r[ci.time]}</b></div>
           <span style="${lb}">价</span> <span style="${vl(cls)}">${price.toFixed(2)}</span>
           <span style="${lb}">幅</span> <span style="${vl(cls)}">${s}${pct.toFixed(2)}%</span>
@@ -983,9 +985,9 @@ function renderTimeline(data, refPrice) {
       }
     },
     grid:[
-      {left:_gL,right:_gR,top:28,bottom:'42%'},
-      {left:_gL,right:_gR,top:'64%',height:'12%'},
-      {left:_gL,right:_gR,top:'80%',height:'16%'},
+      {left:_gL,right:_iR,top:28,bottom:'42%'},
+      {left:_gL,right:_iR,top:'64%',height:'12%'},
+      {left:_gL,right:_iR,top:'80%',height:'16%'},
     ],
     xAxis:[
       {type:'category',data:times,gridIndex:0,boundaryGap:false,
@@ -1006,16 +1008,16 @@ function renderTimeline(data, refPrice) {
         splitNumber:4,interval:(pctMax-pctMin)/4,
         splitLine:{lineStyle:{color:'#1e1e30'}},
         axisPointer:{show:true,type:'line',lineStyle:{color:'#555',type:'dashed',width:1}},
-        axisLabel:{color:'#555',fontSize:10,
+        axisLabel:{color:'#555',fontSize:_isMobile?9:10,
           formatter:function(v){return v.toFixed(2)+'%';}},
         axisLine:{onZero:true},axisTick:{onZero:true}},
       {type:'value',gridIndex:0,position:'right',min:priceMin,max:priceMax,
         splitNumber:4,interval:(priceMax-priceMin)/4,
         splitLine:{show:false},
         axisPointer:{show:true,type:'line',lineStyle:{color:'#555',type:'dashed',width:1}},
-        axisLabel:{color:'#555',fontSize:10,formatter:function(v){return v.toFixed(2);}}},
+        axisLabel:{color:'#555',fontSize:_isMobile?9:10,formatter:function(v){return v.toFixed(2);}}},
       {scale:true,gridIndex:1,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{show:false}},
-      {scale:true,gridIndex:2,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{color:'#555',fontSize:10}},
+      {scale:true,gridIndex:2,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{color:'#555',fontSize:_isMobile?9:10}},
     ],
     series:[
       {name:'价格',type:'line',xAxisIndex:0,yAxisIndex:1,data:pricesUp,symbol:'none',
@@ -1045,6 +1047,7 @@ function renderIntradayKline(data, refPrice) {
 
   const ci = {};
   const _itl = _gL + 2;
+  const _iR = _isMobile ? 46 : _gR; // intraday needs right-side price axis
   data.columns.forEach((c, i) => ci[c] = i);
 
   const times=[], ohlc=[], vols=[], ma5=[], ma20=[], dif=[], dea=[], hist=[];
@@ -1091,7 +1094,8 @@ function renderIntradayKline(data, refPrice) {
       trigger:'axis',
       axisPointer:{type:'line',lineStyle:{color:'#555',type:'dashed',width:1}},
       backgroundColor:'rgba(22,33,62,.95)',borderWidth:1,borderColor:'#2a2a4a',
-      padding:[6,10],textStyle:{color:'#e0e0e0',fontSize:12},
+      padding:_isMobile?[6,8]:[6,10],textStyle:{color:'#e0e0e0',fontSize:_isMobile?11:12},
+      confine:true,
       formatter:function(p){
         if(!p||!p.length)return'';
         const i=_intraIdx>=0&&_intraIdx<rows.length?_intraIdx:p[0].dataIndex, r=rows[i];
@@ -1101,7 +1105,7 @@ function renderIntradayKline(data, refPrice) {
         const s=pct>=0?'+':'';
         const lb='color:#555;font-size:11px;padding-right:4px';
         const vl=c2=>`color:${c2||'#bbb'}`;
-        return `<div style="font-size:12px;line-height:1.6;min-width:280px">
+        return `<div style="font-size:12px;line-height:1.6">
           <div style="padding-bottom:4px;border-bottom:1px solid #2a2a4a;margin-bottom:3px"><b>${r[ci.time]}</b></div>
           <span style="${lb}">开</span> <span style="${vl()}">${o.toFixed(2)}</span>
           <span style="${lb}">高</span> <span style="${vl()}">${h.toFixed(2)}</span>
@@ -1118,9 +1122,9 @@ function renderIntradayKline(data, refPrice) {
       }
     },
     grid:[
-      {left:_gL,right:_gR,top:28,bottom:'38%'},
-      {left:_gL,right:_gR,top:'67%',height:'10%'},
-      {left:_gL,right:_gR,top:'82%',height:'13%'},
+      {left:_gL,right:_iR,top:28,bottom:'38%'},
+      {left:_gL,right:_iR,top:'67%',height:'10%'},
+      {left:_gL,right:_iR,top:'82%',height:'13%'},
     ],
     xAxis:[
       {type:'category',data:times,gridIndex:0,boundaryGap:true,
@@ -1136,16 +1140,16 @@ function renderIntradayKline(data, refPrice) {
         splitNumber:4,interval:(pctMax-pctMin)/4,
         splitLine:{lineStyle:{color:'#1e1e30'}},
         axisPointer:{show:true,type:'line',lineStyle:{color:'#555',type:'dashed',width:1}},
-        axisLabel:{color:'#555',fontSize:10,
+        axisLabel:{color:'#555',fontSize:_isMobile?9:10,
           formatter:function(v){return v.toFixed(2)+'%';}},
         axisLine:{onZero:true},axisTick:{onZero:true}},
       {type:'value',gridIndex:0,position:'right',min:priceMin,max:priceMax,
         splitNumber:4,interval:(priceMax-priceMin)/4,
         splitLine:{show:false},
         axisPointer:{show:true,type:'line',lineStyle:{color:'#555',type:'dashed',width:1}},
-        axisLabel:{color:'#555',fontSize:10,formatter:function(v){return v.toFixed(2);}}},
+        axisLabel:{color:'#555',fontSize:_isMobile?9:10,formatter:function(v){return v.toFixed(2);}}},
       {scale:true,gridIndex:1,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{show:false}},
-      {scale:true,gridIndex:2,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{color:'#555',fontSize:10}},
+      {scale:true,gridIndex:2,splitLine:{lineStyle:{color:'#1e1e30'}},axisLabel:{color:'#555',fontSize:_isMobile?9:10}},
     ],
     dataZoom: [],
     series:[
