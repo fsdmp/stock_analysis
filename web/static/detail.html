@@ -259,17 +259,17 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
   .info-grid { font-size: 11px; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
   .info-grid .g { margin-right: 8px; flex-shrink: 0; }
   .info-grid .sep { display: none; }
-  #chart { height: calc(100vh - 90px); }
+  #chart { height: calc(100vh - 140px); height: calc(100dvh - 140px); }
 
   /* Fixed buttons - mobile bottom bar */
   #scoreBtn {
     position: fixed; right: auto; left: 12px; bottom: 12px; top: auto;
-    padding: 10px 20px; border-radius: 24px; font-size: 14px;
+    padding: 8px 16px; border-radius: 20px; font-size: 13px;
     box-shadow: 0 2px 12px rgba(233,69,96,.3);
   }
   #wlBtn {
     position: fixed; right: 12px; bottom: 12px; top: auto; left: auto;
-    padding: 10px 20px; border-radius: 24px; font-size: 14px;
+    padding: 8px 16px; border-radius: 20px; font-size: 13px;
   }
   .wl-popup {
     right: 12px; left: 12px; top: auto; bottom: 56px; width: auto;
@@ -396,8 +396,8 @@ const chart = echarts.init(document.getElementById('chart'), 'dark');
 const UP = '#e74c3c', DN = '#2ecc71';
 const MA_C = ['#f1c40f','#e67e22','#9b59b6','#3498db'];
 const _isMobile = window.innerWidth <= 768;
-const _gL = _isMobile ? 48 : 65;
-const _gR = _isMobile ? 48 : 65;
+const _gL = _isMobile ? 38 : 65;
+const _gR = _isMobile ? 38 : 65;
 
 let currentCode = '', currentName = '', rawData = null;
 let analysisData = null;  // fetched from /api/analysis/<code>
@@ -629,14 +629,14 @@ function renderChart() {
     animation:false,
     axisPointer:{link:[{xAxisIndex:'all'}]},
     title:[
-      {text:'K线 (双击查看分时)', left:_tl, top:8, textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
-      {text:'MA5', left:_tl + 120, top:8, textStyle:{color:'#f1c40f',fontSize:_fs9,fontWeight:'normal'}},
-      {text:'MA10', left:_tl + 155, top:8, textStyle:{color:'#9b59b6',fontSize:_fs9,fontWeight:'normal'}},
-      {text:'MA20', left:_tl + 200, top:8, textStyle:{color:'#3498db',fontSize:_fs9,fontWeight:'normal'}},
-      {text:maData.length?'压力/支撑':'', left:_tl + 260, top:8, textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
-      {text:`VOL  ${fmtVol(R(rows,rows.length-1).vol)}`, left:_tl, top:'49.5%', textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
-      {text:'MACD (12,26,9)', left:_tl, top:'63.5%', textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
-      {text:'KDJ (9,3,3)', left:_tl, top:'81.5%', textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
+      {text:'K线 (双击查看分时)', left:_tl, top:6, textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
+      {text:'MA5', left:_tl + (_isMobile?55:120), top:6, textStyle:{color:'#f1c40f',fontSize:_fs9,fontWeight:'normal'}},
+      {text:'MA10', left:_tl + (_isMobile?85:155), top:6, textStyle:{color:'#9b59b6',fontSize:_fs9,fontWeight:'normal'}},
+      {text:'MA20', left:_tl + (_isMobile?120:200), top:6, textStyle:{color:'#3498db',fontSize:_fs9,fontWeight:'normal'}},
+      {text:maData.length?'压力/支撑':'', left:_tl + (_isMobile?155:260), top:6, textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
+      {text:`VOL  ${fmtVol(R(rows,rows.length-1).vol)}`, left:_tl, top:_isMobile?'45%':'49.5%', textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
+      {text:'MACD (12,26,9)', left:_tl, top:_isMobile?'58%':'63.5%', textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
+      {text:'KDJ (9,3,3)', left:_tl, top:_isMobile?'75%':'81.5%', textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
     ],
     tooltip:{
       trigger:'axis',
@@ -687,10 +687,10 @@ function renderChart() {
       }
     },
     grid:[
-      {left:_gL,right:_gR,top:28,height:'42%'},
-      {left:_gL,right:_gR,top:'50%',height:'10%'},
-      {left:_gL,right:_gR,top:'64%',height:'14%'},
-      {left:_gL,right:_gR,top:'82%',height:'14%'},
+      {left:_gL,right:_gR,top:24,height:_isMobile?'38%':'42%'},
+      {left:_gL,right:_gR,top:_isMobile?'46%':'50%',height:_isMobile?'9%':'10%'},
+      {left:_gL,right:_gR,top:_isMobile?'59%':'64%',height:_isMobile?'13%':'14%'},
+      {left:_gL,right:_gR,top:_isMobile?'76%':'82%',height:_isMobile?'13%':'14%'},
     ],
     xAxis:[mkX(0,true),mkX(1),mkX(2),mkX(3)],
     yAxis:[
@@ -1009,6 +1009,7 @@ function renderIntradayKline(data, refPrice) {
   if (!len) return;
 
   const ci = {};
+  const _itl = _gL + 2;
   data.columns.forEach((c, i) => ci[c] = i);
 
   const times=[], ohlc=[], vols=[], ma5=[], ma20=[], dif=[], dea=[], hist=[];
