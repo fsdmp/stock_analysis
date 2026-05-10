@@ -404,8 +404,8 @@ const chart = echarts.init(document.getElementById('chart'), 'dark');
 const UP = '#e74c3c', DN = '#2ecc71';
 const MA_C = ['#f1c40f','#e67e22','#9b59b6','#3498db'];
 const _isMobile = window.innerWidth <= 768;
-const _gL = _isMobile ? 38 : 65;
-const _gR = _isMobile ? 38 : 65;
+const _gL = _isMobile ? 46 : 65;
+const _gR = _isMobile ? 12 : 65;
 
 let currentCode = '', currentName = '', rawData = null;
 let analysisData = null;  // fetched from /api/analysis/<code>
@@ -623,11 +623,11 @@ function renderChart() {
   const mkX = (gi, showLabel) => ({
     type:'category', data:dates, gridIndex:gi, boundaryGap:true,
     axisLine:{lineStyle:{color:'#2a2a3a'}}, axisTick:{show:false},
-    axisLabel: showLabel ? {color:'#555',fontSize:10} : {show:false}
+    axisLabel: showLabel ? {color:'#555',fontSize:_isMobile?9:10} : {show:false}
   });
   const mkY = (gi, fmt) => ({
     scale:true, gridIndex:gi, splitLine:{lineStyle:{color:'#1e1e30'}},
-    axisLabel:{color:'#555',fontSize:10, formatter:fmt}
+    axisLabel:{color:'#555',fontSize:_isMobile?9:10, formatter:fmt}
   });
 
   const _tl = _gL + 2; // title left
@@ -637,21 +637,22 @@ function renderChart() {
     animation:false,
     axisPointer:{link:[{xAxisIndex:'all'}]},
     title:[
-      {text:'K线 (双击查看分时)', left:_tl, top:6, textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
-      {text:'MA5', left:_tl + (_isMobile?55:120), top:6, textStyle:{color:'#f1c40f',fontSize:_fs9,fontWeight:'normal'}},
-      {text:'MA10', left:_tl + (_isMobile?85:155), top:6, textStyle:{color:'#9b59b6',fontSize:_fs9,fontWeight:'normal'}},
-      {text:'MA20', left:_tl + (_isMobile?120:200), top:6, textStyle:{color:'#3498db',fontSize:_fs9,fontWeight:'normal'}},
-      {text:maData.length?'压力/支撑':'', left:_tl + (_isMobile?155:260), top:6, textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
-      {text:`VOL  ${fmtVol(R(rows,rows.length-1).vol)}`, left:_tl, top:_isMobile?'45%':'49.5%', textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
-      {text:'MACD (12,26,9)', left:_tl, top:_isMobile?'58%':'63.5%', textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
-      {text:'KDJ (9,3,3)', left:_tl, top:_isMobile?'75%':'81.5%', textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
+      {text:'K线 (双击查看分时)', left:_tl, top:8, textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
+      {text:'MA5', left:_tl + (_isMobile?60:120), top:8, textStyle:{color:'#f1c40f',fontSize:_fs9,fontWeight:'normal'}},
+      {text:'MA10', left:_tl + (_isMobile?90:155), top:8, textStyle:{color:'#9b59b6',fontSize:_fs9,fontWeight:'normal'}},
+      {text:'MA20', left:_tl + (_isMobile?125:200), top:8, textStyle:{color:'#3498db',fontSize:_fs9,fontWeight:'normal'}},
+      {text:maData.length?'压力/支撑':'', left:_tl + (_isMobile?160:260), top:8, textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
+      {text:`VOL  ${fmtVol(R(rows,rows.length-1).vol)}`, left:_tl, top:'49.5%', textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
+      {text:'MACD (12,26,9)', left:_tl, top:'63.5%', textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
+      {text:'KDJ (9,3,3)', left:_tl, top:'81.5%', textStyle:{color:'#555',fontSize:_fs9,fontWeight:'normal'}},
     ],
     tooltip:{
       trigger:'axis',
       axisPointer:{type:'line', lineStyle:{color:'#555',type:'dashed',width:1}},
       backgroundColor:'rgba(22,33,62,.95)', borderWidth:1, borderColor:'#2a2a4a',
-      padding:[8,12],
-      textStyle:{color:'#e0e0e0',fontSize:12},
+      padding:_isMobile?[6,8]:[8,12],
+      textStyle:{color:'#e0e0e0',fontSize:_isMobile?11:12},
+      confine:true,
       formatter:function(p){
         if(!p||!p.length) return '';
         const di = _hoverIdx>=0&&_hoverIdx<rows.length ? _hoverIdx : p[0].dataIndex;
@@ -695,17 +696,17 @@ function renderChart() {
       }
     },
     grid:[
-      {left:_gL,right:_gR,top:24,height:_isMobile?'38%':'42%'},
-      {left:_gL,right:_gR,top:_isMobile?'46%':'50%',height:_isMobile?'9%':'10%'},
-      {left:_gL,right:_gR,top:_isMobile?'59%':'64%',height:_isMobile?'13%':'14%'},
-      {left:_gL,right:_gR,top:_isMobile?'76%':'82%',height:_isMobile?'13%':'14%'},
+      {left:_gL,right:_gR,top:28,height:'42%'},
+      {left:_gL,right:_gR,top:'50%',height:'10%'},
+      {left:_gL,right:_gR,top:'64%',height:'14%'},
+      {left:_gL,right:_gR,top:'82%',height:'14%'},
     ],
     xAxis:[mkX(0,true),mkX(1),mkX(2),mkX(3)],
     yAxis:[
       {...mkY(0), axisPointer:{show:true,type:'line',lineStyle:{color:'#555',type:'dashed',width:1}}},
       mkY(1,v=>fmtVol(v)), mkY(2), mkY(3)
     ],
-    dataZoom:[{type:'inside',xAxisIndex:[0,1,2,3],start:Math.max(0,(1-120/len)*100),end:100,zoomOnMouseWheel:false,moveOnMouseWheel:false,moveOnMouseMove:false}],
+    dataZoom:[{type:'inside',xAxisIndex:[0,1,2,3],start:Math.max(0,(1-120/len)*100),end:100,zoomOnMouseWheel:_isMobile?true:false,moveOnMouseWheel:false,moveOnMouseMove:_isMobile?true:false}],
     series:[
       {name:'K线',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:ohlc,
         itemStyle:{color:UP,color0:DN,borderColor:UP,borderColor0:DN}},
