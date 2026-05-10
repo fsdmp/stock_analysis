@@ -276,11 +276,19 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, "PingFan
   }
 
   /* Score overlay - full screen on mobile */
-  .score-box { width: 100vw; min-width: unset; max-width: 100vw; max-height: 100vh; border-radius: 0; }
-  .sc-top { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .score-overlay.active { align-items: flex-start; }
+  .score-box {
+    width: 100vw; min-width: unset; max-width: 100vw;
+    height: 100vh; height: 100dvh;
+    max-height: 100vh; max-height: 100dvh;
+    border-radius: 0;
+  }
+  .score-header { padding: 10px 14px; }
+  #scoreContent { padding: 12px 14px; }
+  .sc-top { flex-direction: column; align-items: flex-start; gap: 12px; padding: 12px; }
   .sc-gauge { width: 80px; height: 80px; }
   .sc-gauge-num { font-size: 22px; }
-  .sc-action { font-size: 18px; }
+  .sc-action { font-size: 16px; }
   .sc-dim-val { font-size: 14px; }
 
   /* Intraday modal - full screen on mobile */
