@@ -780,7 +780,7 @@ function _freqForMode(mode) {
   return '5';
 }
 
-// Double-click K-line candle -> open intraday
+// Double-click K-line candle -> open intraday (desktop)
 chart.on('dblclick', function(params) {
   if (!params || params.componentType !== 'series' || params.seriesName !== 'K线') return;
   if (!rawData || !rawData.data) return;
@@ -789,6 +789,32 @@ chart.on('dblclick', function(params) {
   showLoading();
   openIntraday(dateStr, idx);
 });
+
+// Long press K-line candle -> open intraday (mobile)
+if (_isMobile) {
+  let _lpTimer = null;
+  let _lpFired = false;
+  chart.getZr().on('mousedown', function(e) {
+    _lpFired = false;
+    _lpTimer = setTimeout(function() {
+      _lpFired = true;
+      try {
+        const pt = chart.convertFromPixel({seriesIndex: 0}, [e.offsetX, e.offsetY]);
+        if (!pt) return;
+        const idx = Math.round(pt[0]);
+        if (idx < 0 || idx >= rawData.data.length) return;
+        const dateStr = rawData.data[idx][C.date];
+        showLoading();
+        openIntraday(dateStr, idx);
+      } catch(ex) {}
+    }, 600);
+  });
+  chart.getZr().on('mousemove', function() { clearTimeout(_lpTimer); });
+  chart.getZr().on('mouseup', function() { clearTimeout(_lpTimer); });
+  // Prevent touch scroll during long press
+  chart.getZr().on('touchmove', function() { clearTimeout(_lpTimer); });
+  chart.getZr().on('touchend', function() { clearTimeout(_lpTimer); });
+}
 
 async function openIntraday(dateStr, dateIdx) {
   intradayDates = _getAllDates();
