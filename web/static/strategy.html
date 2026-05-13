@@ -1356,7 +1356,7 @@ async function refreshScan(filename) {
 async function batchAddWatchlist() {
   if (!currentResults.length) { alert('当前无扫描结果'); return; }
   const now = new Date();
-  const dateStr = String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0');
+  const dateStr = String(now.getFullYear()) + String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0');
   const groupName = currentName + dateStr;
   const codes = currentResults.map(r => r.code);
   const btn = document.getElementById('btnWatchlist');

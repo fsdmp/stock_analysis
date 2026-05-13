@@ -157,24 +157,46 @@ def build_stock_index():
 
 # === Watchlist ===
 
+_watchlist_lock = threading.Lock()
+
+
 def _load_watchlist():
     """Load watchlist from JSON file, ensuring default group exists."""
-    if WATCHLIST_FILE.exists():
-        try:
-            with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            groups = data.get("groups", [])
-            if not any(g["id"] == "default" for g in groups):
-                groups.insert(0, {"id": "default", "name": "默认分组", "stocks": []})
-            return groups
-        except Exception:
-            pass
+    with _watchlist_lock:
+        if WATCHLIST_FILE.exists():
+            try:
+                with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                groups = data.get("groups", [])
+                if not any(g["id"] == "default" for g in groups):
+                    groups.insert(0, {"id": "default", "name": "默认分组", "stocks": []})
+                return groups
+            except Exception:
+                pass
     return [{"id": "default", "name": "默认分组", "stocks": []}]
 
 
 def _save_watchlist(groups):
-    with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
-        json.dump({"groups": groups}, f, ensure_ascii=False, indent=2)
+    """Atomically save watchlist to avoid corruption on concurrent writes."""
+    import tempfile
+    import os
+    data = json.dumps({"groups": groups}, ensure_ascii=False, indent=2)
+    with _watchlist_lock:
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            suffix=".tmp", dir=str(WATCHLIST_FILE.parent), prefix=".wl_"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, str(WATCHLIST_FILE))
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 @app.route("/watchlist")
@@ -273,14 +295,11 @@ def api_watchlist_add_stock():
     if not code:
         return jsonify({"error": "股票代码不能为空"}), 400
     groups = _load_watchlist()
-    # Remove from all groups first (avoid duplicates)
-    for g in groups:
-        if code in g["stocks"]:
-            g["stocks"].remove(code)
-    # Add to target group
+    # Add to target group (allow stock in multiple groups)
     for g in groups:
         if g["id"] == gid:
-            g["stocks"].append(code)
+            if code not in g["stocks"]:
+                g["stocks"].append(code)
             break
     _save_watchlist(groups)
     return jsonify({"status": "ok"})
@@ -364,6 +383,34 @@ def api_watchlist_batch_add():
 
     _save_watchlist(groups)
     return jsonify({"status": "ok", "group_id": target["id"], "group_name": group_name, "added": added, "total": len(target["stocks"])})
+
+
+@app.route("/api/watchlist/reorder", methods=["POST"])
+@login_required
+def api_watchlist_reorder():
+    """Reorder watchlist groups. { order: [id1, id2, ...] }"""
+    data = request.get_json(silent=True) or {}
+    order = data.get("order", [])
+    if not order or not isinstance(order, list):
+        return jsonify({"error": "排序数据无效"}), 400
+
+    groups = _load_watchlist()
+    group_map = {g["id"]: g for g in groups}
+
+    # Verify all ids exist
+    for gid in order:
+        if gid not in group_map:
+            return jsonify({"error": f"分组 {gid} 不存在"}), 400
+
+    # Add any groups not in the order list at the end (safety)
+    ordered = [group_map[gid] for gid in order]
+    existing_ids = set(order)
+    for g in groups:
+        if g["id"] not in existing_ids:
+            ordered.append(g)
+
+    _save_watchlist(ordered)
+    return jsonify({"status": "ok"})
 
 
 @app.route("/api/watchlist/check/<code>")

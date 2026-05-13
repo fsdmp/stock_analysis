@@ -50,11 +50,20 @@ body {
   padding: 10px 16px; cursor: pointer; font-size: 14px;
   display: flex; justify-content: space-between; align-items: center;
   transition: background .15s; border-left: 3px solid transparent;
+  position: relative;
 }
 .group-item:hover { background: rgba(255,255,255,.03); }
 .group-item.active {
   background: rgba(233,69,96,.08); border-left-color: #e94560; color: #e94560;
 }
+.group-item .drag-handle {
+  position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
+  color: #333; font-size: 11px; cursor: grab; padding: 2px; line-height: 1;
+  user-select: none;
+}
+.group-item .drag-handle:hover { color: #666; }
+.group-item.dragging { opacity: .4; }
+.group-item.drag-over { border-top: 2px solid #e94560; }
 .group-item .g-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .group-item .g-count {
   font-size: 11px; color: #555; margin-left: 6px;
@@ -306,7 +315,12 @@ function renderGroups() {
   el.innerHTML = allGroups.map(g => {
     const active = g.id === activeGroupId ? ' active' : '';
     const canEdit = g.id !== 'default';
-    return `<div class="group-item${active}" onclick="selectGroup('${g.id}')">
+    return `<div class="group-item${active}" id="gitem-${g.id}" data-gid="${g.id}"
+         draggable="true"
+         onclick="selectGroup('${g.id}')"
+         ondragstart="onDragStart(event)" ondragend="onDragEnd(event)"
+         ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+      <span class="drag-handle" title="拖拽排序">&#9776;</span>
       <span class="g-name">${esc(g.name)}</span>
       <span class="g-count">${g.stocks.length}</span>
       ${canEdit ? `<span class="g-actions">
@@ -315,6 +329,66 @@ function renderGroups() {
       </span>` : ''}
     </div>`;
   }).join('');
+}
+
+// ===== Drag & Drop for group reorder =====
+let _dragSrcGid = null;
+
+function onDragStart(e) {
+  const item = e.target.closest('.group-item');
+  if (!item) return;
+  _dragSrcGid = item.dataset.gid;
+  item.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', _dragSrcGid);
+}
+
+function onDragEnd(e) {
+  _dragSrcGid = null;
+  document.querySelectorAll('.group-item').forEach(el => {
+    el.classList.remove('dragging', 'drag-over');
+  });
+}
+
+function onDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const item = e.target.closest('.group-item');
+  if (!item || item.dataset.gid === _dragSrcGid) return;
+  document.querySelectorAll('.group-item.drag-over').forEach(el => el.classList.remove('drag-over'));
+  item.classList.add('drag-over');
+}
+
+function onDragLeave(e) {
+  const item = e.target.closest('.group-item');
+  if (item) item.classList.remove('drag-over');
+}
+
+function onDrop(e) {
+  e.preventDefault();
+  const target = e.target.closest('.group-item');
+  if (!target || !_dragSrcGid) return;
+  const targetGid = target.dataset.gid;
+  if (targetGid === _dragSrcGid) return;
+
+  // Reorder allGroups array
+  const srcIdx = allGroups.findIndex(g => g.id === _dragSrcGid);
+  const tgtIdx = allGroups.findIndex(g => g.id === targetGid);
+  if (srcIdx < 0 || tgtIdx < 0) return;
+  const [moved] = allGroups.splice(srcIdx, 1);
+  allGroups.splice(tgtIdx, 0, moved);
+
+  renderGroups();
+  saveGroupOrder();
+}
+
+async function saveGroupOrder() {
+  const order = allGroups.map(g => g.id);
+  await fetch('/api/watchlist/reorder', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({order}),
+  });
 }
 
 // Score cache: code -> { total, action }
