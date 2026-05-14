@@ -99,6 +99,7 @@ def bs_query_iter(func, *args, **kwargs):
 
     Returns (rows, rs) where rows is list of row data and rs is the result set.
     If session is lost or network error occurs, force re-login and retry once.
+    Includes a per-row iteration timeout to prevent infinite hangs.
     """
     with _bs_lock:
         _ensure_login()
@@ -110,8 +111,15 @@ def bs_query_iter(func, *args, **kwargs):
             rs = func(*args, **kwargs)
 
         rows = []
+        max_iter_time = 60  # max seconds for the entire iteration
+        import time as _time
+        _t0 = _time.time()
         while rs.error_code == "0" and rs.next():
             rows.append(rs.get_row_data())
+            if _time.time() - _t0 > max_iter_time:
+                logger.warning(f"bs_query_iter timed out after {max_iter_time}s, "
+                               f"returning {len(rows)} rows so far")
+                break
         return rows, rs
 
 

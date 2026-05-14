@@ -1927,11 +1927,45 @@ def api_update():
                 _update_status["message"] = f"更新中 {current}/{total} - {code}"
 
             update_all(progress_cb=on_progress)
-            fetch_new_listings()
-            build_stock_names(use_cache=False)
+
+            # fetch_new_listings with timeout and error isolation
+            _update_status["message"] = "正在检查新股..."
+            try:
+                import signal
+
+                class _TimeoutError(Exception):
+                    pass
+
+                def _timeout_handler(signum, frame):
+                    raise _TimeoutError("fetch_new_listings timed out")
+
+                # Only works on Linux; set a 120s timeout
+                old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+                signal.alarm(120)
+                try:
+                    fetch_new_listings()
+                finally:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old_handler)
+            except Exception as e:
+                print(f"[update] fetch_new_listings failed (non-fatal): {e}")
+
+            # build_stock_names with error isolation
+            try:
+                build_stock_names(use_cache=False)
+            except Exception as e:
+                print(f"[update] build_stock_names failed (non-fatal): {e}")
+                # Fallback to cache
+                try:
+                    build_stock_names(use_cache=True)
+                except Exception:
+                    pass
+
             build_stock_index()
             _update_status["message"] = f"更新完成，共 {len(_stock_index)} 只股票"
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             _update_status["message"] = f"更新失败: {e}"
         finally:
             _update_status["running"] = False
