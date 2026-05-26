@@ -1,0 +1,82 @@
+{
+  "name": "涨停回踩5日线",
+  "description": "",
+  "version": "2.0",
+  "tags": [],
+  "filter": {
+    "logic": "AND",
+    "rules": [
+      {
+        "field": "code_prefix",
+        "op": "in",
+        "value": [
+          "00",
+          "60"
+        ]
+      },
+      {
+        "field": "ma_align",
+        "mas": [
+          "ma5",
+          "ma10",
+          "ma20"
+        ],
+        "op": "=",
+        "value": "多头排列"
+      },
+      {
+        "field": "close",
+        "op": ">",
+        "ref": "ma5"
+      },
+      {
+        "field": "is_limit_up",
+        "op": "=",
+        "value": false
+      },
+      {
+        "field": "limit_down_count",
+        "lookback": 30,
+        "op": "=",
+        "value": 0
+      },
+      {
+        "field": "is_limit_down",
+        "op": "=",
+        "value": false
+      },
+      {
+        "field": "ma5",
+        "lookback": 5,
+        "op": "rising"
+      },
+      {
+        "field": "is_st",
+        "op": "=",
+        "value": false
+      },
+      {
+        "field": "limit_up_count",
+        "lookback": 7,
+        "op": ">",
+        "value": 0
+      },
+      {
+        "field": "limit_up_count",
+        "lookback": 2,
+        "op": "=",
+        "value": 0
+      },
+      {
+        "field": "macd_hist",
+        "op": "in_zone",
+        "value": "红柱"
+      },
+      {
+        "field": "pct_change",
+        "op": "<",
+        "value": 8
+      }
+    ]
+  }
+}
