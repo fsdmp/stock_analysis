@@ -31,6 +31,42 @@ from stock_data.analysis import calc_support_resistance, calc_signals
 
 
 # ---------------------------------------------------------------------------
+# Board (板块) identification
+# ---------------------------------------------------------------------------
+
+def _get_board_type(code: str) -> str:
+    """根据股票代码判断所属板块.
+
+    Returns:
+        "main"   - 主板 (沪60x/深00x)
+        "chinext" - 创业板 (300x/301x)
+        "star"   - 科创板 (688x)
+    """
+    if code.startswith("688"):
+        return "star"
+    if code.startswith("300") or code.startswith("301"):
+        return "chinext"
+    return "main"
+
+
+def _limit_threshold(code: str) -> float:
+    """返回涨停/跌停判定阈值.
+
+    主板: 9.5%  (涨停10%, 取9.5以考虑舍入)
+    创业板/科创板: 19.5%  (涨停20%, 取19.5以考虑舍入)
+    """
+    board = _get_board_type(code)
+    if board in ("chinext", "star"):
+        return 19.5
+    return 9.5
+
+
+def _is_high_volatility_board(code: str) -> bool:
+    """是否属于高波动板块(创业板/科创板), 用于调整涨跌幅/换手率等阈值."""
+    return _get_board_type(code) in ("chinext", "star")
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -87,20 +123,84 @@ def _clamp(x, lo=-10, hi=10):
     return max(lo, min(hi, x))
 
 
-def _recent_limit_up_count(cols, n):
-    """从昨天开始往前数连续涨停天数 (pct >= 9.5).
+def _detect_broken_limit_up(cols, n, code=""):
+    """检测最近N日的涨停炸板情况.
+
+    涨停炸板定义: 当日最高价触及涨停价(收盘接近昨收*(1+阈值)), 但收盘价未能封住.
+    炸板说明多方进攻后遇抛压, 是重要的短线信号.
+
+    Returns:
+        dict: {
+            "today_broken": bool,       # 今日是否炸板
+            "recent_broken_days": int,  # 近5日炸板次数
+            "broken_detail": str,       # 炸板描述
+        }
+    """
+    close = cols["close"]
+    high = cols["high"]
+    pct = cols.get("pct_change")
+    threshold = _limit_threshold(code) if code else 9.5
+
+    result = {
+        "today_broken": False,
+        "recent_broken_days": 0,
+        "broken_detail": "",
+    }
+
+    if pct is None or n < 2:
+        return result
+
+    # --- 今日炸板检测 ---
+    tp = float(pct[n - 1]) if not np.isnan(pct[n - 1]) else 0
+    hi = high[n - 1]
+    cp = close[n - 1]
+    prev_close = close[n - 2] if n >= 2 else cp
+
+    # 判断最高价是否曾触及涨停价: 最高价 >= 昨收*(1+阈值/100)*0.995 (允许0.5%误差)
+    if prev_close > 0:
+        limit_price = prev_close * (1 + threshold / 100)
+        # 最高价接近或超过涨停价, 但收盘价未封住(涨幅<阈值)
+        if hi >= limit_price * 0.995 and tp < threshold:
+            result["today_broken"] = True
+            # 计算炸板回落幅度: 从最高价到收盘价的回落
+            fallback_pct = (hi - cp) / hi * 100 if hi > 0 else 0
+            result["broken_detail"] = f"今日炸板(涨幅{tp:+.1f}%,回落{fallback_pct:.1f}%)"
+
+    # --- 近5日炸板次数 ---
+    lookback = min(5, n - 1)
+    for i in range(n - 1, max(n - 1 - lookback, 0), -1):
+        if i < 1:
+            continue
+        p = float(pct[i]) if not np.isnan(pct[i]) else 0
+        h = high[i]
+        c = close[i]
+        pc = close[i - 1]
+        if pc > 0:
+            lp = pc * (1 + threshold / 100)
+            if h >= lp * 0.995 and p < threshold:
+                result["recent_broken_days"] += 1
+
+    return result
+
+
+def _recent_limit_up_count(cols, n, code=""):
+    """从昨天开始往前数连续涨停天数.
 
     返回 0 = 昨天没涨停(今日为首板或非涨停)
     返回 N = 昨天及之前连续N天涨停(今日为第N+1板)
+
+    Args:
+        code: 股票代码, 用于判断板块类型和涨停阈值
     """
     pct = cols.get("pct_change")
     if pct is None:
         return 0
+    threshold = _limit_threshold(code) if code else 9.5
     count = 0
     for i in range(n - 2, -1, -1):
         if i < len(pct):
             p = pct[i]
-            if not np.isnan(p) and p >= 9.5:
+            if not np.isnan(p) and p >= threshold:
                 count += 1
             else:
                 break
@@ -596,11 +696,14 @@ def _score_kdj(cols, n, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_volume(cols, n, trend):
+def _score_volume(cols, n, trend, code=""):
     """量价配合 with trend context.
 
     - Uptrend + shrinking volume + price up = controlled rise (bullish)
     - Downtrend + heavy volume + small gain = distribution (bearish)
+
+    Args:
+        code: 股票代码, 用于判断板块类型
     """
     score, details = 0, []
     vol = cols["volume"]
@@ -617,15 +720,19 @@ def _score_volume(cols, n, trend):
     pct = _safe(cols, n - 1, "pct_change")
     pv = float(pct) if _v(pct) else 0
 
+    # 创业板/科创板涨跌幅阈值放大
+    hv = _is_high_volatility_board(code) if code else False
+    s = 2.0 if hv else 1.0
+
     # Volume ratio scoring
     if ratio5 >= 3:
-        if pv > 2:
+        if pv > 2 * s:
             score += 5
             details.append(f"放量上涨(比={ratio5:.1f})")
             if trend <= -1:
                 score -= 2
                 details.append("下跌趋势放量反弹(警惕)")
-        elif pv < -2:
+        elif pv < -2 * s:
             score -= 5
             details.append(f"放量下跌(比={ratio5:.1f})")
             if trend >= 1:
@@ -635,10 +742,10 @@ def _score_volume(cols, n, trend):
             score -= 3
             details.append(f"放量滞涨(比={ratio5:.1f})")
     elif ratio5 >= 1.5:
-        if pv > 1:
+        if pv > 1 * s:
             score += 3
             details.append(f"放量上涨(比={ratio5:.1f})")
-        elif pv < -1:
+        elif pv < -1 * s:
             score -= 3
             details.append(f"放量下跌(比={ratio5:.1f})")
         else:
@@ -830,30 +937,38 @@ def _score_squeeze(cols, n, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_momentum(cols, n, trend):
+def _score_momentum(cols, n, trend, code=""):
     """短期动量 (CORE dimension for short-term).
 
     Trend context:
     - Uptrend + pullback = buying opportunity
     - Downtrend + bounce = selling opportunity
     - Strong momentum aligned with trend = AMPLIFIED
+
+    Args:
+        code: 股票代码, 用于判断板块类型(创业板/科创板涨跌幅限制20%)
     """
     score, details = 0, []
     close = cols["close"]
     pct = cols["pct_change"]
     cp = close[n - 1]
 
+    # 创业板/科创板涨跌幅限制为20%, 动量阈值相应放大
+    hv = _is_high_volatility_board(code) if code else False
+    # 涨跌幅区间阈值: 主板用原始值, 创业板/科创板放大1.6~2倍
+    s = 2.0 if hv else 1.0  # scale factor
+
     # === Today's change (most important) ===
     tp = float(pct[n - 1]) if n > 0 else 0
 
-    if tp > 5:
+    if tp > 5 * s:
         if trend <= -1:
             score += 1
             details.append(f"反弹{tp:+.1f}%(趋势偏弱)")
         else:
             score += 3
             details.append(f"大涨{tp:+.1f}%(注意追高风险)")
-    elif tp > 3:
+    elif tp > 3 * s:
         if trend >= 1:
             score += 3
             details.append(f"强势上涨{tp:+.1f}%")
@@ -863,7 +978,7 @@ def _score_momentum(cols, n, trend):
         else:
             score += 2
             details.append(f"上涨{tp:+.1f}%")
-    elif tp > 1:
+    elif tp > 1 * s:
         if trend >= 1:
             score += 3
             details.append(f"上涨{tp:+.1f}%(趋势配合)")
@@ -876,10 +991,10 @@ def _score_momentum(cols, n, trend):
     elif tp > 0:
         score += 1
         details.append(f"微涨{tp:+.1f}%")
-    elif tp > -1:
+    elif tp > -1 * s:
         score -= 1
         details.append(f"微跌{tp:+.1f}%")
-    elif tp > -3:
+    elif tp > -3 * s:
         if trend >= 1:
             score -= 1
             details.append(f"回调{tp:+.1f}%(买点?)")
@@ -889,7 +1004,7 @@ def _score_momentum(cols, n, trend):
         else:
             score -= 2
             details.append(f"下跌{tp:+.1f}%")
-    elif tp > -5:
+    elif tp > -5 * s:
         if trend >= 1:
             score -= 2
             details.append(f"回调{tp:+.1f}%")
@@ -900,9 +1015,10 @@ def _score_momentum(cols, n, trend):
         score -= 3 if trend >= 1 else 8
         details.append(f"急跌{tp:+.1f}%" if trend >= 1 else f"大跌{tp:+.1f}%")
 
-    # 涨停/跌停风险评估
-    if tp >= 9.5:
-        zt_days = _recent_limit_up_count(cols, n)
+    # 涨停/跌停风险评估 (根据板块动态阈值)
+    limit = _limit_threshold(code) if code else 9.5
+    if tp >= limit:
+        zt_days = _recent_limit_up_count(cols, n, code)
         if zt_days == 0:
             score -= 2
             details.append("首日涨停(封板难买入)")
@@ -912,9 +1028,50 @@ def _score_momentum(cols, n, trend):
         else:
             score += 2
             details.append("多连板(极强趋势)")
-    elif tp <= -9.5:
+    elif tp <= -limit:
         score -= 3
         details.append("接近跌停")
+
+    # ── 涨停炸板因子 ──
+    # 最高价触及涨停价但收盘未封住 = 多头尝试失败, 抛压较大
+    broken_info = _detect_broken_limit_up(cols, n, code)
+    if broken_info["today_broken"]:
+        # 炸板是重要的看空信号: 多头进攻遇阻, 短线抛压明显
+        hi = cols["high"][n - 1]
+        cp_now = close[n - 1]
+        fallback_pct = (hi - cp_now) / hi * 100 if hi > 0 else 0
+        if fallback_pct > 5:
+            # 大幅回落: 炸板后大幅回落, 空头力量极强
+            score -= 6
+            details.append(f"炸板大幅回落{fallback_pct:.1f}%(空头极强)")
+        elif fallback_pct > 3:
+            # 中等回落: 炸板后明显回落
+            score -= 4
+            details.append(f"炸板回落{fallback_pct:.1f}%(抛压较大)")
+        elif fallback_pct > 1:
+            # 小幅回落: 炸板但收盘接近涨停, 仍有上攻意愿
+            if trend >= 1:
+                score -= 1
+                details.append(f"炸板小幅回落{fallback_pct:.1f}%(上升趋势试盘)")
+            else:
+                score -= 3
+                details.append(f"炸板回落{fallback_pct:.1f}%(上方压力大)")
+        else:
+            # 极小幅回落: 几乎封板但差一点
+            if trend >= 1:
+                score += 1
+                details.append("触板未封(强势试探)")
+            else:
+                score -= 2
+                details.append("触板未封(上方压力)")
+    elif broken_info["recent_broken_days"] >= 2:
+        # 近期多次炸板(非今日): 反复炸板说明上方压力持续存在
+        score -= 2
+        details.append(f"近5日{broken_info['recent_broken_days']}次炸板(上方压力持续)")
+    elif broken_info["recent_broken_days"] == 1 and trend <= -1:
+        # 下跌趋势中近期炸板过: 反弹失败后继续看空
+        score -= 1
+        details.append("近期炸板(反弹失败)")
 
     # Consecutive up/down
     streak = 0
@@ -993,62 +1150,62 @@ def _score_momentum(cols, n, trend):
     if n >= 4 and close[n - 4] > 0:
         c3 = (close[n - 1] / close[n - 4] - 1) * 100
         if trend >= 1:  # Uptrend: strong momentum is bullish
-            if c3 > 20:
+            if c3 > 20 * s:
                 score -= 2
                 details.append(f"3日涨{c3:+.1f}%(短期过热)")
-            elif c3 > 15:
+            elif c3 > 15 * s:
                 score += 1
                 details.append(f"3日涨{c3:+.1f}%(强势但偏高)")
-            elif c3 > 10:
+            elif c3 > 10 * s:
                 score += 3
                 details.append(f"3日涨{c3:+.1f}%(主升浪动量)")
-            elif c3 > 5:
+            elif c3 > 5 * s:
                 score += 4
                 details.append(f"3日涨{c3:+.1f}%(强动量)")
-            elif c3 > 3:
+            elif c3 > 3 * s:
                 score += 3
                 details.append(f"3日涨{c3:+.1f}%(健康动量)")
             elif c3 > 0:
                 score += 3
                 details.append(f"3日涨{c3:+.1f}%(温和启动)")
-            elif c3 > -3:
+            elif c3 > -3 * s:
                 score += 2
                 details.append(f"3日微调{c3:+.1f}%(回调买入)")
-            elif c3 > -5:
+            elif c3 > -5 * s:
                 score += 3
                 details.append(f"3日回调{c3:+.1f}%(买点)")
             else:
                 score += 1
                 details.append(f"3日深调{c3:+.1f}%(趋势待确认)")
         elif trend <= -1:  # Downtrend: defensive logic
-            if c3 > 10:
+            if c3 > 10 * s:
                 score -= 3
                 details.append(f"3日涨幅{c3:+.1f}%过热")
-            elif c3 > 5:
+            elif c3 > 5 * s:
                 score += 1
                 details.append(f"3日反弹{c3:+.1f}%")
             elif c3 > 0:
                 score += 1
-            elif c3 < -10:
+            elif c3 < -10 * s:
                 score -= 2
                 details.append(f"3日跌{c3:+.1f}%(弱势)")
-            elif c3 < -5:
+            elif c3 < -5 * s:
                 score -= 2
                 details.append(f"3日跌{c3:+.1f}%")
             else:
                 if c3 < 0:
                     score -= 1
         else:  # Sideways
-            if c3 > 7:
+            if c3 > 7 * s:
                 score += 0
                 details.append(f"3日涨{c3:+.1f}%(突破待确认)")
-            elif c3 > 3:
+            elif c3 > 3 * s:
                 score += 2
                 details.append(f"3日涨{c3:+.1f}%")
             elif c3 > 0:
                 score += 2
                 details.append(f"3日涨{c3:+.1f}%")
-            elif c3 > -5:
+            elif c3 > -5 * s:
                 score -= 1
             else:
                 score += 1
@@ -1074,10 +1231,10 @@ def _score_momentum(cols, n, trend):
     # Today's initiative (first-day move vs continuation)
     if n >= 3:
         yesterday_pct = float(pct[n - 2]) if n >= 2 else 0
-        if tp > 2 and yesterday_pct <= 0:
+        if tp > 2 * s and yesterday_pct <= 0:
             score += 2
             details.append("启动日(首日上攻)")
-        elif tp > 2 and yesterday_pct > 3:
+        elif tp > 2 * s and yesterday_pct > 3 * s:
             if trend < 1:
                 score -= 1
                 details.append("连续加速(获利盘压力)")
@@ -1089,20 +1246,20 @@ def _score_momentum(cols, n, trend):
         c5 = (close[n - 1] / close[n - 6] - 1) * 100
         if trend >= 1:
             # 上升趋势中5日涨幅大是正常的趋势延伸
-            if c5 > 20:
+            if c5 > 20 * s:
                 score -= 1
                 details.append(f"5日涨幅{c5:+.1f}%(短期偏高)")
-            elif c5 > 10:
+            elif c5 > 10 * s:
                 score += 1
                 details.append(f"5日涨{c5:+.1f}%(强趋势)")
         else:
-            if c5 > 15:
+            if c5 > 15 * s:
                 score -= 2
                 details.append(f"5日涨幅{c5:+.1f}%(偏高超买)")
-            elif c5 > 10:
+            elif c5 > 10 * s:
                 score -= 1
                 details.append(f"5日涨{c5:+.1f}%(偏高)")
-        if c5 < -15:
+        if c5 < -15 * s:
             if trend >= 1:
                 score += 3
                 details.append(f"5日深调{c5:+.1f}%(抄底)")
@@ -1119,7 +1276,7 @@ def _score_momentum(cols, n, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_turnover(cols, n, trend):
+def _score_turnover(cols, n, trend, code=""):
     """换手率分析 — 超短线核心维度.
 
     换手率反映市场参与度和资金活跃度：
@@ -1128,6 +1285,9 @@ def _score_turnover(cols, n, trend):
     - 低换手+涨 = 一致性强/主力控盘 (偏多)
     - 低换手+跌 = 无人问津 (偏空)
     - 换手率突变 = 变盘信号
+
+    Args:
+        code: 股票代码, 用于判断板块类型
     """
     score, details = 0, []
 
@@ -1141,13 +1301,26 @@ def _score_turnover(cols, n, trend):
     pct = _safe(cols, n - 1, "pct_change")
     pv = float(pct) if _v(pct) else 0
 
-    # --- 1. 今日换手率绝对水平 (超短线阈值，面向活跃标的) ---
-    if turn > 20:
+    # 创业板/科创板换手率阈值提高: 这些板块盘子小、波动大, 换手率普遍更高
+    hv = _is_high_volatility_board(code) if code else False
+
+    # 换手率分级阈值 (hv板块整体上移)
+    t_super_high = 30 if hv else 20    # 极度活跃
+    t_high = 15 if hv else 10          # 高换手
+    t_mid = 6 if hv else 4             # 适度换手
+    t_low = 3 if hv else 2             # 偏低换手
+    # 涨跌幅判定阈值
+    p_big = 10 if hv else 5            # 大涨/大跌
+    p_mid = 6 if hv else 3             # 中等涨幅
+    p_small = 4 if hv else 2           # 小幅涨跌
+
+    # --- 1. 今日换手率绝对水平 ---
+    if turn > t_super_high:
         # 极度活跃：游资激烈博弈
-        if pv > 5:
+        if pv > p_big:
             score += 5
             details.append(f"超高换手{turn:.1f}%+大涨(游资进攻)")
-        elif pv < -5:
+        elif pv < -p_big:
             score -= 5
             details.append(f"超高换手{turn:.1f}%+大跌(恐慌出货)")
         elif pv > 0:
@@ -1156,15 +1329,15 @@ def _score_turnover(cols, n, trend):
         else:
             score -= 2
             details.append(f"超高换手{turn:.1f}%(方向偏空)")
-    elif turn > 10:
-        # 高换手：超短活跃票的正常区间
-        if pv > 3:
+    elif turn > t_high:
+        # 高换手：活跃票的正常区间
+        if pv > p_mid:
             score += 4 if trend >= 1 else 2
             details.append(f"高换手{turn:.1f}%+上涨" + ("(主力进攻)" if trend >= 1 else "(反弹)"))
-        elif pv < -3:
+        elif pv < -p_mid:
             score -= 4
             details.append(f"高换手{turn:.1f}%+下跌(资金出逃)")
-        elif abs(pv) <= 1:
+        elif abs(pv) <= p_small:
             if trend >= 1:
                 score += 1
                 details.append(f"高换手{turn:.1f}%+整理(上升趋势蓄力)")
@@ -1176,23 +1349,23 @@ def _score_turnover(cols, n, trend):
         else:
             score += 1 if pv > 0 else -1
             details.append(f"高换手{turn:.1f}%")
-    elif turn > 4:
+    elif turn > t_mid:
         # 适度换手
-        if pv > 2:
+        if pv > p_small:
             score += 2
             details.append(f"适度换手{turn:.1f}%+上涨(健康)")
-        elif pv < -2:
+        elif pv < -p_small:
             score -= 2
             details.append(f"适度换手{turn:.1f}%+下跌")
         else:
             score += 1
             details.append(f"换手{turn:.1f}%(正常)")
-    elif turn > 2:
+    elif turn > t_low:
         # 偏低换手
-        if pv > 2:
+        if pv > p_small:
             score += 3 if trend >= 1 else 1
             details.append("低换手+上涨" + ("(主力控盘/一致性强)" if trend >= 1 else ""))
-        elif pv < -2:
+        elif pv < -p_small:
             score -= 1
             details.append(f"低换手{turn:.1f}%+下跌(无人接盘)")
         else:
@@ -1202,7 +1375,7 @@ def _score_turnover(cols, n, trend):
         if pv > 0:
             score += 2
             details.append(f"地量换手{turn:.1f}%(锁仓/启动前兆)")
-        elif pv < -3:
+        elif pv < -p_mid:
             score -= 1
             details.append(f"地量换手{turn:.1f}%+下跌(流动性差)")
         else:
@@ -1247,36 +1420,67 @@ def _score_turnover(cols, n, trend):
                         details.append("换手骤降(无人接盘)")
 
     # --- 3. 涨停板换手分析 (超短线核心) ---
-    if pv >= 9.5:
-        if turn < 5:
+    limit = _limit_threshold(code) if code else 9.5
+    # 涨停换手阈值: 创业板/科创板因盘子和波动特点, 整体换手偏高
+    zt_low = 8 if hv else 5       # 缩量涨停
+    zt_mid = 15 if hv else 10     # 适度涨停
+    zt_high = 30 if hv else 20    # 活跃涨停
+    zt_vhigh = 45 if hv else 30   # 放量涨停
+    dt_high = 20 if hv else 15    # 放量跌停
+    dt_low = 5 if hv else 3       # 缩量跌停
+
+    if pv >= limit:
+        if turn < zt_low:
             score += 4
             details.append(f"缩量涨停(换手{turn:.1f}%,一致性极强)")
-        elif turn < 10:
+        elif turn < zt_mid:
             score += 2
             details.append(f"适度涨停(换手{turn:.1f}%)")
-        elif turn < 20:
+        elif turn < zt_high:
             score += 1
             details.append(f"活跃涨停(换手{turn:.1f}%)")
-        elif turn < 30:
+        elif turn < zt_vhigh:
             score -= 1
             details.append(f"放量涨停(换手{turn:.1f}%,有分歧)")
         else:
             score -= 3
             details.append(f"巨量涨停(换手{turn:.1f}%,严重分歧)")
-    elif pv <= -9.5:
-        if turn > 15:
+    elif pv <= -limit:
+        if turn > dt_high:
             score -= 3
             details.append(f"放量跌停(换手{turn:.1f}%,恐慌)")
-        elif turn < 3:
+        elif turn < dt_low:
             score -= 2
             details.append(f"缩量跌停(换手{turn:.1f}%,封死)")
+
+    # --- 3.5 涨停炸板换手分析 ---
+    # 炸板日的高换手 = 涨停价附近大量换手, 多空博弈激烈
+    # 炸板日的低换手 = 涨停试盘但跟风不足
+    broken_info = _detect_broken_limit_up(cols, n, code)
+    if broken_info["today_broken"]:
+        if turn > zt_high:
+            # 炸板+巨量换手: 涨停价附近大量资金出逃, 非常危险
+            score -= 4
+            details.append(f"炸板巨量换手{turn:.1f}%(涨停价出货)")
+        elif turn > zt_mid:
+            # 炸板+较高换手: 涨停价附近有明显分歧
+            score -= 2
+            details.append(f"炸板放量换手{turn:.1f}%(分歧较大)")
+        elif turn < zt_low:
+            # 炸板+低换手: 试盘性冲板, 跟风资金不足
+            score -= 1
+            details.append(f"炸板缩量换手{turn:.1f}%(跟风不足)")
+        else:
+            # 炸板+适度换手: 正常分歧
+            score -= 1
+            details.append(f"炸板换手{turn:.1f}%(未封板)")
 
     # --- 4. 连续高换手 ---
     if n >= 3:
         high_turn_days = 0
         for i in range(n - 3, n):
             tv = _safe(cols, i, "turnover")
-            if _v(tv) and tv > 10:
+            if _v(tv) and tv > t_high:
                 high_turn_days += 1
         if high_turn_days >= 3:
             if trend >= 1:
@@ -1373,8 +1577,12 @@ def _score_divergence(cols, n, signals, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_smart_money(cols, n, trend):
-    """主力行为 with trend context."""
+def _score_smart_money(cols, n, trend, code=""):
+    """主力行为 with trend context.
+
+    Args:
+        code: 股票代码, 用于判断板块类型
+    """
     score, details = 0, []
     close = cols["close"]
     open_ = cols["open"]
@@ -1460,13 +1668,16 @@ def _score_smart_money(cols, n, trend):
     if va5 > 0:
         vr = vol[n - 1] / va5
         pvv = float(_safe(cols, n - 1, "pct_change") or 0)
-        if vr > 2 and abs(pvv) < 1:
+        # 创业板/科创板涨跌幅阈值放大
+        hv = _is_high_volatility_board(code) if code else False
+        s = 2.0 if hv else 1.0
+        if vr > 2 and abs(pvv) < 1 * s:
             score -= 5 if trend >= 1 else 3
             details.append("放量滞涨" + ("(高位出货)" if trend >= 1 else "(主力出货)"))
-        elif vr < 0.6 and pvv > 3:
+        elif vr < 0.6 and pvv > 3 * s:
             score += 3 if trend >= 1 else 1
             details.append("缩量大涨" + ("(主力控盘)" if trend >= 1 else ""))
-        elif vr < 0.6 and pvv < -3:
+        elif vr < 0.6 and pvv < -3 * s:
             score -= 3 if trend <= -1 else -1
             if trend <= -1:
                 details.append("缩量下跌(恐慌不足)")
@@ -1475,12 +1686,33 @@ def _score_smart_money(cols, n, trend):
 
     # Tail manipulation
     pvv = float(_safe(cols, n - 1, "pct_change") or 0)
-    if (hi - cp) / tr < 0.15 and pvv < 2:
+    if (hi - cp) / tr < 0.15 and pvv < 2 * (2.0 if (_is_high_volatility_board(code) if code else False) else 1.0):
         score -= 3 if trend >= 1 else 1
         details.append("疑似拉尾" + ("(诱多)" if trend >= 1 else ""))
-    elif (cp - lo) / tr < 0.15 and pvv > -2:
+    elif (cp - lo) / tr < 0.15 and pvv > -2 * (2.0 if (_is_high_volatility_board(code) if code else False) else 1.0):
         score += 2 if trend <= -1 else 1
         details.append("疑似砸尾" + ("(加速下跌)" if trend <= -1 else "(洗盘)"))
+
+    # ── 涨停炸板K线形态分析 ──
+    # 炸板日的K线形态特征: 长上影线+高换手 = 主力出货/抛压重
+    broken_info = _detect_broken_limit_up(cols, n, code)
+    if broken_info["today_broken"]:
+        # 上影线比率: 炸板回落形成的上影线越长, 抛压越大
+        us_broken = (hi - cp) / tr if tr > 0 else 0
+        if us_broken > 0.60:
+            # 超长上影线炸板: 涨停价遭遇大量抛单
+            score -= 4
+            details.append(f"炸板长上影{us_broken:.0%}(主力出货)")
+        elif us_broken > 0.40:
+            score -= 2
+            details.append(f"炸板上影{us_broken:.0%}(抛压明显)")
+        elif us_broken > 0.25:
+            score -= 1
+            details.append(f"炸板中上影{us_broken:.0%}(有抛压)")
+        # 炸板日如果是阴线(收盘<开盘), 信号更差
+        if cp < op:
+            score -= 2
+            details.append("炸板收阴(多头溃败)")
 
     if not details:
         details.append("无明显异常")
@@ -1488,8 +1720,12 @@ def _score_smart_money(cols, n, trend):
     return _clamp(score), "; ".join(details)
 
 
-def _score_meta(cols, n, raw_scores, trend):
-    """Meta: signal consistency + trend confirmation + anti-trap."""
+def _score_meta(cols, n, raw_scores, trend, code=""):
+    """Meta: signal consistency + trend confirmation + anti-trap.
+
+    Args:
+        code: 股票代码, 用于判断板块类型
+    """
     score, details = 0, []
     close = cols["close"]
     vol = cols["volume"]
@@ -1523,18 +1759,20 @@ def _score_meta(cols, n, raw_scores, trend):
     # 3. Anti-trap
     ma20 = _safe(cols, n - 1, "ma20")
     cp = close[n - 1]
+    hv = _is_high_volatility_board(code) if code else False
+    s = 2.0 if hv else 1.0
     if _v(ma20) and ma20 > 0:
         dev = (cp - ma20) / ma20 * 100
-        if dev > 8:
+        if dev > 8 * s:
             pct = _safe(cols, n - 1, "pct_change")
             va5 = np.mean(vol[max(0, n - 6):n - 1])
             vr = vol[n - 1] / va5 if va5 > 0 else 1
-            if _v(pct) and pct > 2 and vr > 2:
+            if _v(pct) and pct > 2 * s and vr > 2:
                 score -= 5 if trend <= -1 else 3
                 details.append("高位放量" + ("(诱多)" if trend <= -1 else "(警惕)"))
-        if dev < -8:
+        if dev < -8 * s:
             pct = _safe(cols, n - 1, "pct_change")
-            if _v(pct) and pct < -2:
+            if _v(pct) and pct < -2 * s:
                 score += 4 if trend >= 1 else 2
                 details.append("低位急跌" + ("(洗盘)" if trend >= 1 else "(诱空)"))
 
@@ -1542,14 +1780,14 @@ def _score_meta(cols, n, raw_scores, trend):
     if n >= 6:
         cum5 = (close[n - 1] / close[n - 6] - 1) * 100 if close[n - 6] > 0 else 0
         pt = _safe(cols, n - 1, "pct_change")
-        if cum5 > 10 and _v(pt) and pt < -1:
+        if cum5 > 10 * s and _v(pt) and pt < -1 * s:
             if trend >= 1:
                 score += 1
                 details.append("大涨后回调(买点)")
             else:
                 score -= 3
                 details.append("大涨后回调(追高危险)")
-        elif cum5 < -10 and _v(pt) and pt > 1:
+        elif cum5 < -10 * s and _v(pt) and pt > 1 * s:
             if trend >= 1:
                 score += 3
                 details.append("大跌后反弹(抄底)")
@@ -1579,7 +1817,7 @@ def _calc_atr(cols, n, period=14):
     return np.mean(trs) if trs else 0
 
 
-def _score_price_position(cols, n, trend):
+def _score_price_position(cols, n, trend, code=""):
     """价格位置: 收盘价在近期高低区间的位置 + 距高点距离 + 5日振幅.
 
     Data-driven findings (21 stocks, 区分度排序):
@@ -1589,6 +1827,9 @@ def _score_price_position(cols, n, trend):
 
     核心规律: 价格不能紧贴近期最高点, 需要有回调空间;
               活跃度(振幅)高的票更容易延续上涨.
+
+    Args:
+        code: 股票代码, 用于判断板块类型
     """
     score, details = 0, []
     close = cols["close"]
@@ -1684,17 +1925,24 @@ def _score_price_position(cols, n, trend):
         if l5 > 0:
             range_5d = (h5 - l5) / l5 * 100
 
-            if range_5d > 22:
-                # 非常活跃, 涨票均值19.6%
+            # 创业板/科创板振幅更大, 阈值相应放大
+            hv = _is_high_volatility_board(code) if code else False
+            r_active = 35 if hv else 22     # 非常活跃
+            r_normal = 25 if hv else 15     # 正常活跃
+            r_dead = 12 if hv else 8        # 极度不活跃
+            r_low = 18 if hv else 12        # 偏低
+
+            if range_5d > r_active:
+                # 非常活跃
                 score += 2
                 details.append(f"5日振幅大({range_5d:.0f}%,活跃)")
-            elif range_5d > 15:
+            elif range_5d > r_normal:
                 score += 1
-            elif range_5d < 8:
+            elif range_5d < r_dead:
                 # 极度不活跃
                 score -= 2
                 details.append(f"5日振幅极小({range_5d:.0f}%,死水)")
-            elif range_5d < 12:
+            elif range_5d < r_low:
                 score -= 1
 
     if not details:
@@ -1724,6 +1972,13 @@ def calc_score(df: pd.DataFrame) -> dict:
             "dimensions": [], "summary": "历史数据不足30天，无法评分",
         }
 
+    # 从 df 中提取股票代码, 用于判断板块类型(主板/创业板/科创板)
+    code = ""
+    if "code" in df.columns:
+        code = str(df["code"].iloc[-1])
+    elif hasattr(df, "attrs") and "code" in df.attrs:
+        code = str(df.attrs["code"])
+
     # Pre-extract all columns as numpy arrays for fast access
     cols = _extract_cols(df)
 
@@ -1737,18 +1992,18 @@ def calc_score(df: pd.DataFrame) -> dict:
     dim_raw = []
 
     scorers = [
-        ("价格位置", 18, _score_price_position, (cols, n, trend)),     # r=+0.281 最强正相关，加大
-        ("短期动量", 10, _score_momentum, (cols, n, trend)),           # r=-0.127 略降
-        ("量价配合", 7, _score_volume, (cols, n, trend)),              # r=-0.225 负相关，降低
-        ("MACD动能", 5, _score_macd, (cols, n, trend)),                # r=-0.266 负相关，大幅降低
-        ("主力行为", 9, _score_smart_money, (cols, n, trend)),         # r=+0.017 保持
-        ("换手率", 4, _score_turnover, (cols, n, trend)),              # r=-0.292 最强负相关，大幅降低
-        ("MA趋势", 10, _score_ma_trend, (cols, n, trend)),            # r=+0.187 正相关，提升
-        ("支撑压力", 5, _score_sr, (cols, n, zones, trend)),          # r=+0.067 保持
-        ("KDJ状态", 3, _score_kdj, (cols, n, trend)),                 # r=-0.125 保持低权重
-        ("均线形态", 2, _score_squeeze, (cols, n, trend)),            # 保持
-        ("背离信号", 2, _score_divergence, (cols, n, signals, trend)),# 保持
-        ("趋势确认", 2, _score_meta, (cols, n, dim_raw, trend)),     # 保持
+        ("价格位置", 18, _score_price_position, (cols, n, trend, code)),     # r=+0.281 最强正相关，加大
+        ("短期动量", 10, _score_momentum, (cols, n, trend, code)),           # r=-0.127 略降
+        ("量价配合", 7, _score_volume, (cols, n, trend, code)),              # r=-0.225 负相关，降低
+        ("MACD动能", 5, _score_macd, (cols, n, trend)),                      # r=-0.266 负相关，大幅降低
+        ("主力行为", 9, _score_smart_money, (cols, n, trend, code)),         # r=+0.017 保持
+        ("换手率", 4, _score_turnover, (cols, n, trend, code)),              # r=-0.292 最强负相关，大幅降低
+        ("MA趋势", 10, _score_ma_trend, (cols, n, trend)),                   # r=+0.187 正相关，提升
+        ("支撑压力", 5, _score_sr, (cols, n, zones, trend)),                 # r=+0.067 保持
+        ("KDJ状态", 3, _score_kdj, (cols, n, trend)),                        # r=-0.125 保持低权重
+        ("均线形态", 2, _score_squeeze, (cols, n, trend)),                   # 保持
+        ("背离信号", 2, _score_divergence, (cols, n, signals, trend)),       # 保持
+        ("趋势确认", 2, _score_meta, (cols, n, dim_raw, trend, code)),      # 保持
     ]
 
     # 趋势确认(最后一个)依赖 dim_raw，放最后执行
@@ -1776,22 +2031,46 @@ def calc_score(df: pd.DataFrame) -> dict:
     normalized = 50 + 50 * np.tanh(2.5 * raw_ratio)
     normalized = max(0, min(100, round(normalized)))
 
-    # 首日涨停降温：封板无法买入 + 次日不确定性大
+    # 首日涨停降温：封板无法买入 + 次日不确定性大 (根据板块动态阈值)
     pct_today = _safe(cols, n - 1, "pct_change")
-    if _v(pct_today) and pct_today >= 9.5:
-        if _recent_limit_up_count(cols, n) == 0:
+    limit = _limit_threshold(code) if code else 9.5
+    if _v(pct_today) and pct_today >= limit:
+        if _recent_limit_up_count(cols, n, code) == 0:
             normalized = min(normalized, 72)
+
+    # 涨停炸板降温：炸板说明多头进攻失败, 短线风险加大
+    broken = _detect_broken_limit_up(cols, n, code)
+    if broken["today_broken"]:
+        # 根据炸板回落幅度分档降温
+        hi_today = cols["high"][n - 1]
+        cp_today = cols["close"][n - 1]
+        fallback = (hi_today - cp_today) / hi_today * 100 if hi_today > 0 else 0
+        if fallback > 5:
+            # 大幅炸板回落: 强降温, 评分上限压低到60
+            normalized = min(normalized, 60)
+        elif fallback > 3:
+            # 中等炸板回落: 评分上限压低到65
+            normalized = min(normalized, 65)
+        elif fallback > 1:
+            # 小幅炸板回落: 温和降温
+            normalized = min(normalized, 70)
+        else:
+            # 极小幅回落: 轻微降温
+            normalized = min(normalized, 74)
 
     # 过热降温：仅在非上升趋势 + 大涨+远离MA20时降温
     # 上升趋势中的上涨偏离是正常的趋势延伸，不应惩罚
+    # 创业板/科创板阈值放大
+    hv = _is_high_volatility_board(code) if code else False
+    s = 2.0 if hv else 1.0
     if _v(pct_today) and pct_today > 0 and trend < 1:
         ma20_val = _safe(cols, n - 1, "ma20")
         cp = cols["close"][n - 1]
         if _v(ma20_val) and ma20_val > 0:
             dev_ma20 = (cp - ma20_val) / ma20_val * 100
-            if pct_today > 5 and dev_ma20 > 8:
+            if pct_today > 5 * s and dev_ma20 > 8 * s:
                 normalized = min(normalized, 68)
-            elif pct_today > 3 and dev_ma20 > 5:
+            elif pct_today > 3 * s and dev_ma20 > 5 * s:
                 normalized = min(normalized, 75)
 
     action, hold_advice, summary = _make_advice(normalized, dim_scores, trend)

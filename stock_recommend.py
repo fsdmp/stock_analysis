@@ -229,7 +229,7 @@ def analyze_stock(code, stock_names=None):
     chg_10 = (close / df.iloc[-11]["close"] - 1) * 100 if len(df) >= 11 else 0
 
     # 涨停回踩分析
-    limit_up = _find_limit_up(df)
+    limit_up = _find_limit_up(df, code=code)
 
     # 评分与信号
     signals, risks, score = _evaluate_signals(
@@ -243,6 +243,7 @@ def analyze_stock(code, stock_names=None):
         pullback_pct=limit_up["pullback_pct"],
         pct=pct, chg_3=chg_3, chg_5=chg_5,
         ma5=ma5, ma5_prev=ma5_prev,
+        code=code,
     )
 
     rating = _get_rating(score)
@@ -339,13 +340,31 @@ def _judge_ma_align(ma5, ma10, ma20):
     return "交叉整理"
 
 
-def _find_limit_up(df, lookback=15):
-    """查找最近的涨停日"""
+def _find_limit_up(df, lookback=15, code=None):
+    """查找最近的涨停日
+
+    Args:
+        code: 股票代码, 用于判断板块类型和涨停阈值
+    """
+    # 涨停阈值: 创业板/科创板19%, 主板9.8%
+    threshold = 19.8
+    if code:
+        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+            threshold = 19.8
+        else:
+            threshold = 9.8
+    elif "code" in df.columns:
+        c = str(df["code"].iloc[-1])
+        if c.startswith("300") or c.startswith("301") or c.startswith("688"):
+            threshold = 19.8
+        else:
+            threshold = 9.8
+
     result = {"days_ago": None, "close": None, "high": None,
               "pullback_pct": 0, "current_pullback": 0}
     for i in range(len(df) - 1, max(len(df) - lookback - 1, -1), -1):
         p = df.iloc[i].get("pct_change", 0)
-        if pd.notna(p) and p >= 9.8:
+        if pd.notna(p) and p >= threshold:
             result["days_ago"] = len(df) - 1 - i
             result["close"] = df.iloc[i]["close"]
             result["high"] = df.iloc[i]["high"]
@@ -477,11 +496,16 @@ def _evaluate_signals(**kw):
     if pd.notna(ma5) and pd.notna(ma5p) and ma5 > ma5p:
         score += W["ma5_up"]
 
-    # 10. 短期涨幅过大风险
+    # 10. 短期涨幅过大风险 (创业板/科创板阈值放大)
     c3, c5 = kw["chg_3"], kw["chg_5"]
-    if c3 > 15:
+    pct_threshold = kw.get("pct", 0)
+    code_val = kw.get("code", "")
+    is_hv = code_val.startswith("300") or code_val.startswith("301") or code_val.startswith("688") if code_val else False
+    c3_warn = 30 if is_hv else 15
+    c5_warn = 50 if is_hv else 25
+    if c3 > c3_warn:
         risks.append(f"3日涨幅过大({c3:.1f}%)，短期获利盘多")
-    if c5 > 25:
+    if c5 > c5_warn:
         risks.append(f"5日涨幅过大({c5:.1f}%)，追高风险极大")
 
     return signals, risks, score

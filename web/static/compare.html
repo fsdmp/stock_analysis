@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>股价对比 - A股数据分析平台</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e; color: #e0e0e0;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  min-height: 100vh; display: flex; flex-direction: column;
+}
+
+/* Nav */
+.nav {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 24px; background: #16213e; border-bottom: 1px solid #0f3460;
+}
+.back-btn {
+  padding: 5px 12px; background: transparent; border: 1px solid #333;
+  border-radius: 6px; color: #888; font-size: 13px; cursor: pointer; transition: all .2s;
+}
+.back-btn:hover { border-color: #e94560; color: #e94560; }
+.nav-title { font-size: 16px; color: #e0e0e0; font-weight: 600; }
+
+/* Container */
+.container { max-width: 1400px; margin: 0 auto; padding: 20px 24px; width: 100%; }
+
+/* Card */
+.card {
+  background: #16213e; border-radius: 12px; padding: 20px 24px;
+  border: 1px solid #0f3460; margin-bottom: 20px;
+}
+.card-title {
+  font-size: 14px; font-weight: 600; color: #e0e0e0; margin-bottom: 14px;
+  display: flex; align-items: center; gap: 8px;
+}
+.card-title .icon { font-size: 16px; }
+
+/* Stock input */
+.input-row { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.tag-wrap {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  min-height: 46px; padding: 8px 12px; background: #1a1a2e;
+  border: 2px solid #0f3460; border-radius: 8px; cursor: text;
+  transition: border-color .2s; flex: 1; min-width: 300px; position: relative;
+}
+.tag-wrap:focus-within { border-color: #e94560; }
+.tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 5px 10px; background: #0f3460; border-radius: 6px;
+  font-size: 13px; white-space: nowrap;
+}
+.tag .remove {
+  cursor: pointer; color: #888; font-size: 14px; line-height: 1;
+  margin-left: 2px; transition: color .2s;
+}
+.tag .remove:hover { color: #e94560; }
+.tag-input {
+  border: none; outline: none; background: transparent;
+  color: #e0e0e0; font-size: 14px; min-width: 120px; flex: 1;
+}
+.tag-input::placeholder { color: #555; }
+
+/* Search dropdown inside tag-wrap */
+.search-dropdown {
+  display: none; position: absolute; top: 100%; left: 0; right: 0;
+  margin-top: 4px; background: #16213e; border: 1px solid #0f3460;
+  border-radius: 8px; max-height: 260px; overflow-y: auto; z-index: 20;
+}
+.search-dropdown.show { display: block; }
+.search-dropdown .dd-item {
+  padding: 8px 14px; cursor: pointer; font-size: 13px;
+  display: flex; justify-content: space-between;
+}
+.search-dropdown .dd-item:hover { background: #0f3460; }
+.search-dropdown .dd-item .code { color: #3498db; }
+.search-dropdown .dd-item .name { color: #888; font-size: 12px; margin-left: 8px; }
+
+/* Quick add */
+.quick-add {
+  display: flex; gap: 8px; align-items: center; flex-shrink: 0;
+}
+.quick-add input {
+  padding: 8px 12px; background: #1a1a2e; border: 1px solid #0f3460;
+  border-radius: 6px; color: #e0e0e0; font-size: 13px; width: 200px; outline: none;
+}
+.quick-add input:focus { border-color: #e94560; }
+.quick-add button {
+  padding: 8px 16px; background: #0f3460; border: none; border-radius: 6px;
+  color: #e0e0e0; font-size: 13px; cursor: pointer; transition: all .2s;
+}
+.quick-add button:hover { background: #e94560; }
+
+/* Period config */
+.period-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+.period-chip {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  background: #1a1a2e; border: 2px solid #0f3460; border-radius: 8px;
+  cursor: pointer; transition: all .2s; font-size: 13px;
+}
+.period-chip:hover { border-color: #3498db; }
+.period-chip.active { border-color: #e94560; background: rgba(233,69,96,0.08); }
+.period-chip input[type="checkbox"] {
+  accent-color: #e94560; width: 15px; height: 15px;
+}
+.period-chip label { cursor: pointer; user-select: none; }
+
+.custom-periods {
+  display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap;
+}
+.custom-periods input[type="date"] {
+  padding: 6px 10px; background: #1a1a2e; border: 1px solid #0f3460;
+  border-radius: 6px; color: #e0e0e0; font-size: 13px; outline: none;
+}
+.custom-periods input[type="date"]:focus { border-color: #e94560; }
+.custom-periods button {
+  padding: 6px 14px; background: #0f3460; border: none; border-radius: 6px;
+  color: #e0e0e0; font-size: 13px; cursor: pointer;
+}
+.custom-periods button:hover { background: #e94560; }
+
+/* Run button */
+.run-bar { display: flex; align-items: center; gap: 16px; }
+.run-btn {
+  padding: 10px 32px; background: linear-gradient(135deg, #e94560, #c0392b);
+  border: none; border-radius: 8px; color: #fff; font-size: 15px;
+  font-weight: 600; cursor: pointer; transition: all .2s;
+}
+.run-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(233,69,96,.3); }
+.run-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+.hint { font-size: 12px; color: #666; }
+
+/* Results */
+.results-section { display: none; }
+.results-section.show { display: block; }
+
+/* Tabs */
+.tab-bar {
+  display: flex; gap: 0; border-bottom: 2px solid #0f3460; margin-bottom: 20px;
+}
+.tab-btn {
+  padding: 10px 24px; background: transparent; border: none;
+  color: #888; font-size: 14px; cursor: pointer; transition: all .2s;
+  border-bottom: 2px solid transparent; margin-bottom: -2px;
+}
+.tab-btn:hover { color: #e0e0e0; }
+.tab-btn.active { color: #e94560; border-bottom-color: #e94560; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* Table */
+.compare-table {
+  width: 100%; border-collapse: separate; border-spacing: 0;
+  font-size: 13px;
+}
+.compare-table thead th {
+  background: #0f3460; padding: 10px 12px; text-align: right;
+  font-weight: 600; white-space: nowrap; position: sticky; top: 0;
+  border-bottom: 2px solid #e94560;
+}
+.compare-table thead th:first-child { text-align: left; border-radius: 8px 0 0 0; }
+.compare-table thead th:last-child { border-radius: 0 8px 0 0; }
+.compare-table thead th.period-header {
+  text-align: center; background: #162447; border-bottom: 1px solid #0f3460;
+}
+.compare-table thead th.sub-header {
+  font-size: 12px; font-weight: 400; color: #aaa; background: #0d2847;
+}
+.compare-table tbody td {
+  padding: 9px 12px; text-align: right; border-bottom: 1px solid #1a1a3e;
+  white-space: nowrap;
+}
+.compare-table tbody td:first-child {
+  text-align: left; font-weight: 500; position: sticky; left: 0;
+  background: #16213e; z-index: 1;
+}
+.compare-table tbody tr:hover td { background: #1a1a3e; }
+.compare-table tbody tr:hover td:first-child { background: #1a1a3e; }
+
+.table-scroll {
+  overflow-x: auto; overflow-y: auto; max-height: 600px;
+  border-radius: 8px; border: 1px solid #0f3460;
+}
+
+/* Color helpers */
+.up { color: #e74c3c; }
+.down { color: #2ecc71; }
+.neutral { color: #888; }
+
+/* Chart container */
+.chart-box {
+  width: 100%; height: 450px; background: #1a1a2e;
+  border-radius: 8px; border: 1px solid #0f3460;
+}
+
+/* Watchlist import */
+.wl-import {
+  margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.wl-select {
+  padding: 6px 10px; background: #1a1a2e; border: 1px solid #0f3460;
+  border-radius: 6px; color: #e0e0e0; font-size: 13px; outline: none;
+  max-width: 200px;
+}
+.wl-select:focus { border-color: #e94560; }
+
+/* Summary mini cards */
+.summary-cards {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px; margin-bottom: 20px;
+}
+.summary-card {
+  background: #0f3460; border-radius: 10px; padding: 16px 18px;
+  border: 1px solid #1a2a4a;
+}
+.summary-card .stock-name {
+  font-size: 15px; font-weight: 600; margin-bottom: 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.summary-card .stock-code { color: #3498db; font-size: 12px; font-weight: 400; }
+.summary-card .metric-row {
+  display: flex; justify-content: space-between; padding: 3px 0;
+  font-size: 12px;
+}
+.summary-card .metric-label { color: #888; }
+.summary-card .period-label {
+  font-size: 11px; color: #3498db; margin-top: 8px; margin-bottom: 4px;
+  padding-top: 6px; border-top: 1px solid #1a2a4a;
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .nav { padding: 10px 16px; }
+  .container { padding: 14px 12px; }
+  .input-row { flex-direction: column; }
+  .tag-wrap { min-width: 100%; }
+  .quick-add input { width: 140px; }
+  .period-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .chart-box { height: 320px; }
+  .summary-cards { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <button class="back-btn" onclick="location.href='/'">&#8592; 首页</button>
+  <span class="nav-title">股价对比</span>
+</div>
+
+<div class="container">
+
+  <!-- Stock selection -->
+  <div class="card">
+    <div class="card-title"><span class="icon">&#128200;</span> 选择股票</div>
+    <div class="input-row">
+      <div class="tag-wrap" id="tagWrap" onclick="document.getElementById('tagInput').focus()">
+        <span id="tagContainer"></span>
+        <input class="tag-input" id="tagInput" type="text" placeholder="输入代码或名称搜索添加..." autocomplete="off">
+        <div class="search-dropdown" id="searchDropdown"></div>
+      </div>
+    </div>
+    <div class="wl-import">
+      <select class="wl-select" id="wlSelect"><option value="">从自选股导入...</option></select>
+      <button onclick="importWatchlist()" style="padding:6px 14px;background:#0f3460;border:none;border-radius:6px;color:#e0e0e0;font-size:13px;cursor:pointer;">导入</button>
+      <button onclick="clearAll()" style="padding:6px 14px;background:#0f3460;border:none;border-radius:6px;color:#e0e0e0;font-size:13px;cursor:pointer;">清空</button>
+    </div>
+  </div>
+
+  <!-- Period selection -->
+  <div class="card">
+    <div class="card-title"><span class="icon">&#128197;</span> 选择时间段</div>
+    <div class="period-grid" id="periodGrid"></div>
+    <div class="custom-periods">
+      <span style="font-size:12px;color:#888;">自定义:</span>
+      <input type="date" id="customStart">
+      <span style="color:#555;">~</span>
+      <input type="date" id="customEnd">
+      <button onclick="addCustomPeriod()">添加</button>
+    </div>
+  </div>
+
+  <!-- Run -->
+  <div class="card" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div class="run-bar">
+      <button class="run-btn" id="runBtn" onclick="runCompare()">开始对比</button>
+      <span class="hint" id="hintText">请选择至少2只股票和1个时间段</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <span style="font-size:12px;color:#888;">对比基准:</span>
+      <input type="text" id="benchmarkInput" placeholder="如 000001" value=""
+        style="padding:6px 10px;background:#1a1a2e;border:1px solid #0f3460;border-radius:6px;color:#e0e0e0;font-size:13px;width:100px;outline:none;">
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="results-section" id="resultsSection">
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab('table')">对比表格</button>
+      <button class="tab-btn" onclick="switchTab('chart')">可视化图表</button>
+      <button class="tab-btn" onclick="switchTab('summary')">摘要卡片</button>
+    </div>
+
+    <div class="tab-panel active" id="panel-table">
+      <div class="table-scroll" id="tableScroll"></div>
+    </div>
+    <div class="tab-panel" id="panel-chart">
+      <div class="chart-box" id="mainChart"></div>
+      <div class="chart-box" id="riskChart" style="margin-top:16px;"></div>
+    </div>
+    <div class="tab-panel" id="panel-summary">
+      <div class="summary-cards" id="summaryCards"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// === State ===
+let selectedStocks = [];  // [{code, name}]
+let selectedPeriods = {}; // label -> {start, end}
+let compareData = null;
+let searchTimer;
+
+const PRESET_PERIODS = [
+  { label: '近1周', days: 7 },
+  { label: '近2周', days: 14 },
+  { label: '近1月', days: 30 },
+  { label: '近3月', days: 90 },
+  { label: '近6月', days: 180 },
+  { label: '近1年', days: 365 },
+  { label: '近2年', days: 730 },
+  { label: '近3年', days: 1095 },
+  { label: '今年', special: 'ytd' },
+];
+
+// Colors for stocks in charts
+const STOCK_COLORS = [
+  '#e94560','#3498db','#2ecc71','#f39c12','#9b59b6',
+  '#1abc9c','#e67e22','#e74c3c','#00bcd4','#ff5722',
+  '#8bc34a','#ff9800','#673ab7','#009688','#cddc39'
+];
+
+// === Init ===
+function init() {
+  renderPeriodGrid();
+  loadWatchlistGroups();
+  setupTagInput();
+  // Set default end date to today
+  const today = new Date().toISOString().split('T')[0];
+  document.getElementById('customEnd').value = today;
+}
+
+function setupTagInput() {
+  const input = document.getElementById('tagInput');
+  const dropdown = document.getElementById('searchDropdown');
+
+  input.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    const q = input.value.trim();
+    if (!q) { dropdown.classList.remove('show'); return; }
+    searchTimer = setTimeout(() => searchStock(q), 200);
+  });
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Backspace' && !input.value && selectedStocks.length) {
+      removeStock(selectedStocks[selectedStocks.length - 1].code);
+    }
+    if (e.key === 'Escape') dropdown.classList.remove('show');
+  });
+
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.tag-wrap')) dropdown.classList.remove('show');
+  });
+}
+
+// === Stock Search ===
+async function searchStock(q) {
+  const resp = await fetch(`/api/stocks?q=${q}&page=1&size=10`);
+  const json = await resp.json();
+  const dropdown = document.getElementById('searchDropdown');
+  if (!json.data || !json.data.length) {
+    dropdown.innerHTML = '<div style="padding:10px;color:#555;font-size:13px;">无匹配结果</div>';
+    dropdown.classList.add('show');
+    return;
+  }
+  dropdown.innerHTML = json.data.map(s => {
+    const name = s.name || '';
+    const already = selectedStocks.some(x => x.code === s.code) ? ' style="color:#555"' : '';
+    return `<div class="dd-item"${already} onclick="addStock('${s.code}','${name.replace(/'/g,"\\'")}')">
+      <span><span class="code">${s.code}</span><span class="name">${name}</span></span>
+      <span style="font-size:12px;color:#666;">${already ? '已添加' : ''}</span>
+    </div>`;
+  }).join('');
+  dropdown.classList.add('show');
+}
+
+function addStock(code, name) {
+  if (selectedStocks.some(s => s.code === code)) return;
+  selectedStocks.push({ code, name });
+  document.getElementById('tagInput').value = '';
+  document.getElementById('searchDropdown').classList.remove('show');
+  renderTags();
+  updateHint();
+}
+
+function removeStock(code) {
+  selectedStocks = selectedStocks.filter(s => s.code !== code);
+  renderTags();
+  updateHint();
+}
+
+function renderTags() {
+  const container = document.getElementById('tagContainer');
+  container.innerHTML = selectedStocks.map(s =>
+    `<span class="tag">${s.code} ${s.name}<span class="remove" onclick="removeStock('${s.code}')">&times;</span></span>`
+  ).join('');
+}
+
+function clearAll() {
+  selectedStocks = [];
+  renderTags();
+  updateHint();
+}
+
+function updateHint() {
+  const hint = document.getElementById('hintText');
+  const nStocks = selectedStocks.length;
+  const nPeriods = Object.keys(selectedPeriods).length;
+  if (nStocks < 1) hint.textContent = '请选择至少1只股票';
+  else if (nPeriods < 1) hint.textContent = '请选择至少1个时间段';
+  else hint.textContent = `已选 ${nStocks} 只股票，${nPeriods} 个时间段`;
+}
+
+// === Watchlist Import ===
+async function loadWatchlistGroups() {
+  try {
+    const resp = await fetch('/api/watchlist');
+    const groups = await resp.json();
+    const sel = document.getElementById('wlSelect');
+    sel.innerHTML = '<option value="">从自选股导入...</option>';
+    groups.forEach(g => {
+      const opt = document.createElement('option');
+      opt.value = g.id;
+      opt.textContent = `${g.name} (${g.stocks.length})`;
+      opt.dataset.stocks = JSON.stringify(g.stocks);
+      sel.appendChild(opt);
+    });
+  } catch(e) {}
+}
+
+function importWatchlist() {
+  const sel = document.getElementById('wlSelect');
+  const opt = sel.selectedOptions[0];
+  if (!opt || !opt.value) return;
+  try {
+    const stocks = JSON.parse(opt.dataset.stocks);
+    stocks.forEach(s => {
+      if (!selectedStocks.some(x => x.code === s.code)) {
+        selectedStocks.push({ code: s.code, name: s.name || '' });
+      }
+    });
+    renderTags();
+    updateHint();
+  } catch(e) {}
+}
+
+// === Period Selection ===
+function renderPeriodGrid() {
+  const grid = document.getElementById('periodGrid');
+  grid.innerHTML = PRESET_PERIODS.map(p => {
+    const id = 'period_' + p.label;
+    return `<div class="period-chip" id="${id}" onclick="togglePeriod(this,'${p.label}',${p.days || 0},'${p.special || ''}')">
+      <input type="checkbox" id="cb_${id}">
+      <label for="cb_${id}">${p.label}</label>
+    </div>`;
+  }).join('');
+}
+
+function togglePeriod(el, label, days, special) {
+  const cb = el.querySelector('input');
+  if (el.classList.contains('active')) {
+    el.classList.remove('active');
+    cb.checked = false;
+    delete selectedPeriods[label];
+  } else {
+    const { start, end } = calcPeriodDates(days, special);
+    el.classList.add('active');
+    cb.checked = true;
+    selectedPeriods[label] = { start, end };
+  }
+  updateHint();
+}
+
+function calcPeriodDates(days, special) {
+  const end = new Date();
+  const start = new Date();
+  if (special === 'ytd') {
+    start.setMonth(0, 1);
+  } else {
+    start.setDate(end.getDate() - days);
+  }
+  return {
+    start: start.toISOString().split('T')[0],
+    end: end.toISOString().split('T')[0],
+  };
+}
+
+function addCustomPeriod() {
+  const s = document.getElementById('customStart').value;
+  const e = document.getElementById('customEnd').value;
+  if (!s || !e) { alert('请选择起止日期'); return; }
+  if (s >= e) { alert('开始日期须早于结束日期'); return; }
+  const label = `${s} ~ ${e}`;
+  if (selectedPeriods[label]) { alert('该时间段已添加'); return; }
+  selectedPeriods[label] = { start: s, end: e };
+  // Add a chip dynamically
+  const grid = document.getElementById('periodGrid');
+  const div = document.createElement('div');
+  div.className = 'period-chip active';
+  div.innerHTML = `<input type="checkbox" checked><label>${label}</label>`;
+  div.onclick = function() {
+    delete selectedPeriods[label];
+    div.remove();
+    updateHint();
+  };
+  grid.appendChild(div);
+  updateHint();
+}
+
+// === Run Compare ===
+async function runCompare() {
+  if (selectedStocks.length < 1 || Object.keys(selectedPeriods).length < 1) {
+    alert('请选择至少1只股票和1个时间段');
+    return;
+  }
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  btn.textContent = '对比中...';
+
+  try {
+    const codes = selectedStocks.map(s => s.code);
+    const periods = Object.entries(selectedPeriods).map(([label, v]) => ({
+      label, start: v.start, end: v.end
+    }));
+
+    const resp = await fetch('/api/compare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codes, periods }),
+    });
+    compareData = await resp.json();
+
+    if (compareData.error) {
+      alert(compareData.error);
+      return;
+    }
+
+    renderResults(periods);
+  } catch(e) {
+    alert('请求失败: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '开始对比';
+  }
+}
+
+// === Render Results ===
+const METRICS = [
+  { key: 'change_pct', label: '涨跌幅', unit: '%', color: 'pct' },
+  { key: 'max_gain_pct', label: '最大涨幅', unit: '%', color: 'abs' },
+  { key: 'max_drawdown_pct', label: '最大回撤', unit: '%', color: 'abs' },
+  { key: 'amplitude', label: '振幅', unit: '%', color: 'abs' },
+  { key: 'volatility', label: '波动率', unit: '%', color: 'abs' },
+  { key: 'sharpe_ratio', label: '夏普比率', unit: '', color: 'abs' },
+  { key: 'avg_turnover', label: '均换手率', unit: '%', color: 'abs' },
+  { key: 'trading_days', label: '交易日', unit: '天', color: 'abs' },
+  { key: 'start_price', label: '期初价', unit: '', color: 'abs' },
+  { key: 'end_price', label: '期末价', unit: '', color: 'abs' },
+  { key: 'highest', label: '最高价', unit: '', color: 'abs' },
+  { key: 'lowest', label: '最低价', unit: '', color: 'abs' },
+  { key: 'up_days', label: '上涨天数', unit: '天', color: 'abs' },
+  { key: 'down_days', label: '下跌天数', unit: '天', color: 'abs' },
+  { key: 'max_consecutive_up', label: '最大连涨', unit: '天', color: 'abs' },
+  { key: 'max_consecutive_down', label: '最大连跌', unit: '天', color: 'abs' },
+];
+
+function renderResults(periods) {
+  document.getElementById('resultsSection').classList.add('show');
+  renderTable(periods);
+  renderCharts(periods);
+  renderSummary(periods);
+}
+
+function colorVal(val, type) {
+  if (val === null || val === undefined || val === '--') return '<span class="neutral">--</span>';
+  const n = Number(val);
+  if (type === 'pct') {
+    if (n > 0) return `<span class="up">+${n.toFixed(2)}%</span>`;
+    if (n < 0) return `<span class="down">${n.toFixed(2)}%</span>`;
+    return `<span class="neutral">0.00%</span>`;
+  }
+  return `<span class="neutral">${typeof val === 'number' ? val.toFixed(2) : val}</span>`;
+}
+
+function renderTable(periods) {
+  const stocks = compareData.filter(s => !s.error);
+  if (!stocks.length) {
+    document.getElementById('tableScroll').innerHTML = '<p style="padding:20px;color:#555;">无有效数据</p>';
+    return;
+  }
+
+  // Build table with metrics as rows, grouped by period
+  let html = '<table class="compare-table"><thead>';
+
+  // Top header: stock names
+  html += '<tr><th style="min-width:120px;">指标 \\ 股票</th>';
+  stocks.forEach(s => {
+    html += `<th style="min-width:100px;">${s.code}<br><span style="font-weight:400;font-size:11px;color:#aaa;">${s.name}</span></th>`;
+  });
+  html += '</tr></thead><tbody>';
+
+  periods.forEach((p, pi) => {
+    // Period header row
+    html += `<tr><td colspan="${stocks.length + 1}" style="background:#0d2847;font-weight:600;color:#3498db;text-align:center;padding:10px;font-size:13px;">
+      ${p.label} (${p.start} ~ ${p.end})</td></tr>`;
+
+    METRICS.forEach(m => {
+      // Collect values for highlighting best/worst
+      const vals = stocks.map(s => {
+        const pd = s.periods[p.label];
+        if (!pd || pd.error) return null;
+        return pd[m.key];
+      });
+
+      html += '<tr><td>' + m.label + '</td>';
+      stocks.forEach((s, si) => {
+        const pd = s.periods[p.label];
+        const v = vals[si];
+        if (v === null || v === undefined) {
+          html += '<td style="color:#555;">--</td>';
+        } else if (m.color === 'pct') {
+          html += `<td>${colorVal(v, 'pct')}</td>`;
+        } else {
+          html += `<td>${v}</td>`;
+        }
+      });
+      html += '</tr>';
+    });
+  });
+
+  html += '</tbody></table>';
+  document.getElementById('tableScroll').innerHTML = html;
+}
+
+function renderCharts(periods) {
+  const stocks = compareData.filter(s => !s.error);
+  if (!stocks.length) return;
+
+  const labels = periods.map(p => p.label);
+
+  // Chart 1: Change % comparison
+  const mainChart = echarts.init(document.getElementById('mainChart'));
+  const mainSeries = stocks.map((s, i) => ({
+    name: `${s.code} ${s.name}`,
+    type: 'bar',
+    data: periods.map(p => {
+      const pd = s.periods[p.label];
+      return pd && !pd.error ? pd.change_pct : null;
+    }),
+    itemStyle: { color: STOCK_COLORS[i % STOCK_COLORS.length], borderRadius: [3, 3, 0, 0] },
+    barGap: '10%',
+  }));
+  mainChart.setOption({
+    title: { text: '涨跌幅对比 (%)', textStyle: { color: '#e0e0e0', fontSize: 14 }, left: 'center', top: 10 },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+      formatter: function(params) {
+        let s = params[0].axisValue + '<br>';
+        params.forEach(p => {
+          const v = p.value;
+          const color = v > 0 ? '#e74c3c' : v < 0 ? '#2ecc71' : '#888';
+          s += `${p.marker} ${p.seriesName}: <span style="color:${color}">${v > 0 ? '+' : ''}${v}%</span><br>`;
+        });
+        return s;
+      }
+    },
+    legend: { top: 36, textStyle: { color: '#aaa', fontSize: 11 }, type: 'scroll' },
+    grid: { top: 80, bottom: 40, left: 60, right: 20 },
+    xAxis: { type: 'category', data: labels, axisLabel: { color: '#888' } },
+    yAxis: { type: 'value', axisLabel: { color: '#888', formatter: '{value}%' }, splitLine: { lineStyle: { color: '#1a2a4a' } } },
+    series: mainSeries,
+  });
+
+  // Chart 2: Risk metrics (max gain vs max drawdown)
+  const riskChart = echarts.init(document.getElementById('riskChart'));
+  const riskSeriesUp = stocks.map((s, i) => ({
+    name: `${s.code} 最大涨幅`,
+    type: 'bar',
+    stack: s.code,
+    data: periods.map(p => {
+      const pd = s.periods[p.label];
+      return pd && !pd.error ? pd.max_gain_pct : null;
+    }),
+    itemStyle: { color: STOCK_COLORS[i % STOCK_COLORS.length], opacity: 0.8 },
+  }));
+  const riskSeriesDown = stocks.map((s, i) => ({
+    name: `${s.code} 最大回撤`,
+    type: 'bar',
+    stack: s.code + '_dd',
+    data: periods.map(p => {
+      const pd = s.periods[p.label];
+      return pd && !pd.error ? pd.max_drawdown_pct : null;
+    }),
+    itemStyle: { color: STOCK_COLORS[i % STOCK_COLORS.length], opacity: 0.4 },
+  }));
+  riskChart.setOption({
+    title: { text: '最大涨幅 vs 最大回撤 (%)', textStyle: { color: '#e0e0e0', fontSize: 14 }, left: 'center', top: 10 },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+      formatter: function(params) {
+        let s = params[0].axisValue + '<br>';
+        params.forEach(p => {
+          s += `${p.marker} ${p.seriesName}: <span style="color:${p.value >= 0 ? '#e74c3c' : '#2ecc71'}">${p.value}%</span><br>`;
+        });
+        return s;
+      }
+    },
+    legend: { top: 36, textStyle: { color: '#aaa', fontSize: 11 }, type: 'scroll' },
+    grid: { top: 80, bottom: 40, left: 60, right: 20 },
+    xAxis: { type: 'category', data: labels, axisLabel: { color: '#888' } },
+    yAxis: { type: 'value', axisLabel: { color: '#888', formatter: '{value}%' }, splitLine: { lineStyle: { color: '#1a2a4a' } } },
+    series: [...riskSeriesUp, ...riskSeriesDown],
+  });
+
+  // Responsive
+  window.addEventListener('resize', () => { mainChart.resize(); riskChart.resize(); });
+}
+
+function renderSummary(periods) {
+  const stocks = compareData.filter(s => !s.error);
+  const container = document.getElementById('summaryCards');
+
+  container.innerHTML = stocks.map((s, si) => {
+    let inner = '';
+    periods.forEach(p => {
+      const pd = s.periods[p.label];
+      inner += `<div class="period-label">${p.label}</div>`;
+      if (!pd || pd.error) {
+        inner += `<div class="metric-row"><span class="metric-label">--</span></div>`;
+        return;
+      }
+      const chgColor = pd.change_pct > 0 ? 'up' : pd.change_pct < 0 ? 'down' : 'neutral';
+      inner += `
+        <div class="metric-row"><span class="metric-label">涨跌幅</span><span class="${chgColor}">${pd.change_pct > 0 ? '+' : ''}${pd.change_pct}%</span></div>
+        <div class="metric-row"><span class="metric-label">最大涨幅</span><span class="up">+${pd.max_gain_pct}%</span></div>
+        <div class="metric-row"><span class="metric-label">最大回撤</span><span class="down">${pd.max_drawdown_pct}%</span></div>
+        <div class="metric-row"><span class="metric-label">振幅</span><span>${pd.amplitude}%</span></div>
+        <div class="metric-row"><span class="metric-label">波动率</span><span>${pd.volatility}%</span></div>
+        <div class="metric-row"><span class="metric-label">夏普比率</span><span>${pd.sharpe_ratio}</span></div>
+        <div class="metric-row"><span class="metric-label">价格区间</span><span>${pd.lowest} ~ ${pd.highest}</span></div>
+        <div class="metric-row"><span class="metric-label">均换手率</span><span>${pd.avg_turnover}%</span></div>
+        <div class="metric-row"><span class="metric-label">涨/跌天数</span><span class="up">${pd.up_days}</span> / <span class="down">${pd.down_days}</span></div>
+      `;
+    });
+    return `<div class="summary-card">
+      <div class="stock-name" style="color:${STOCK_COLORS[si % STOCK_COLORS.length]}">
+        ${s.name || s.code} <span class="stock-code">${s.code}</span>
+      </div>
+      ${inner}
+    </div>`;
+  }).join('');
+}
+
+// === Tabs ===
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  event.target.classList.add('active');
+  // Resize charts when switching to chart tab
+  if (name === 'chart') {
+    setTimeout(() => {
+      window.dispatchEvent(new Event('resize'));
+    }, 100);
+  }
+}
+
+// === Start ===
+init();
+</script>
+</body>
+</html>

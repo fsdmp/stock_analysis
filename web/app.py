@@ -1991,6 +1991,177 @@ def api_update_status():
     return jsonify(_update_status)
 
 
+# === Stock Compare ===
+
+@app.route("/compare")
+@login_required
+def page_compare():
+    return send_from_directory("static", "compare.html")
+
+
+@app.route("/api/compare", methods=["POST"])
+@login_required
+def api_compare():
+    """Compare stocks across multiple time periods.
+
+    Request body:
+    {
+        "codes": ["000001", "600519", ...],
+        "periods": [
+            {"label": "近1周", "start": "2026-05-21", "end": "2026-05-28"},
+            {"label": "近1月", "start": "2026-04-28", "end": "2026-05-28"},
+            ...
+        ]
+    }
+
+    Returns per-stock per-period stats:
+    - change_pct:       涨跌幅 (%)
+    - max_gain_pct:     最大涨幅 (from period start price)
+    - max_drawdown_pct: 最大回撤 (%)
+    - volatility:       波动率 (std of daily returns)
+    - sharpe_ratio:     夏普比率
+    - avg_turnover:     平均换手率
+    - trading_days:     交易日数
+    - start_price:      期初价
+    - end_price:        期末价
+    - highest:          最高价
+    - lowest:           最低价
+    - amplitude:        振幅 (highest-lowest)/start_price
+    """
+    data = request.get_json(silent=True) or {}
+    codes = data.get("codes", [])
+    periods = data.get("periods", [])
+
+    if not codes or not isinstance(codes, list):
+        return jsonify({"error": "请提供股票代码列表"}), 400
+    if not periods or not isinstance(periods, list):
+        return jsonify({"error": "请提供时间段列表"}), 400
+
+    codes = [c.zfill(6) for c in codes if isinstance(c, str) and c.strip()]
+    if not codes:
+        return jsonify({"error": "无有效股票代码"}), 400
+
+    results = []
+
+    for code in codes:
+        path = DATA_DIR / f"{code}.parquet"
+        if not path.exists():
+            results.append({
+                "code": code,
+                "name": _stock_names.get(code, ""),
+                "error": "无数据",
+                "periods": {},
+            })
+            continue
+
+        try:
+            df = pd.read_parquet(path)
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.sort_values("date").reset_index(drop=True)
+
+            period_stats = {}
+            for p in periods:
+                label = p.get("label", f"{p['start']}~{p['end']}")
+                start = pd.Timestamp(p["start"])
+                end = pd.Timestamp(p["end"])
+
+                mask = (df["date"] >= start) & (df["date"] <= end)
+                sub = df[mask].reset_index(drop=True)
+
+                if len(sub) < 2:
+                    period_stats[label] = {"error": "数据不足"}
+                    continue
+
+                start_price = float(sub.iloc[0]["open"])
+                end_price = float(sub.iloc[-1]["close"])
+                highest = float(sub["high"].max())
+                lowest = float(sub["low"].min())
+
+                change_pct = (end_price - start_price) / start_price * 100
+
+                # 最大涨幅: 相对期初价的最大涨幅
+                cummax_close = sub["close"].cummax()
+                max_gain_pct = float((cummax_close.max() - start_price) / start_price * 100)
+
+                # 最大回撤: 从任一高点到后续低点的最大跌幅
+                cummax = sub["close"].cummax()
+                drawdown = (sub["close"] - cummax) / cummax * 100
+                max_drawdown_pct = float(drawdown.min())
+
+                # 波动率: 日收益率标准差 × sqrt(交易日)
+                daily_returns = sub["close"].pct_change().dropna()
+                volatility = float(daily_returns.std() * np.sqrt(len(sub))) * 100 if len(daily_returns) > 0 else 0
+
+                # 夏普比率 (简化: 假设无风险利率为0)
+                sharpe_ratio = 0.0
+                if len(daily_returns) > 1 and daily_returns.std() > 0:
+                    sharpe_ratio = float(daily_returns.mean() / daily_returns.std() * np.sqrt(252))
+
+                # 平均换手率
+                avg_turnover = float(sub["turnover"].mean()) if "turnover" in sub.columns else 0
+
+                # 振幅
+                amplitude = (highest - lowest) / start_price * 100
+
+                # 最大连续上涨/下跌天数
+                up_days = 0
+                down_days = 0
+                cur_up = 0
+                cur_down = 0
+                for _, row in sub.iterrows():
+                    chg = row.get("pct_change", 0)
+                    if pd.notna(chg) and chg > 0:
+                        cur_up += 1
+                        cur_down = 0
+                    elif pd.notna(chg) and chg < 0:
+                        cur_down += 1
+                        cur_up = 0
+                    else:
+                        cur_up = 0
+                        cur_down = 0
+                    up_days = max(up_days, cur_up)
+                    down_days = max(down_days, cur_down)
+
+                # 上涨天数/下跌天数
+                pct_changes = sub["pct_change"].dropna()
+                up_count = int((pct_changes > 0).sum())
+                down_count = int((pct_changes < 0).sum())
+
+                period_stats[label] = {
+                    "change_pct": round(change_pct, 2),
+                    "max_gain_pct": round(max_gain_pct, 2),
+                    "max_drawdown_pct": round(max_drawdown_pct, 2),
+                    "volatility": round(volatility, 2),
+                    "sharpe_ratio": round(sharpe_ratio, 3),
+                    "avg_turnover": round(avg_turnover, 3),
+                    "trading_days": len(sub),
+                    "start_price": round(start_price, 2),
+                    "end_price": round(end_price, 2),
+                    "highest": round(highest, 2),
+                    "lowest": round(lowest, 2),
+                    "amplitude": round(amplitude, 2),
+                    "max_consecutive_up": up_days,
+                    "max_consecutive_down": down_days,
+                    "up_days": up_count,
+                    "down_days": down_count,
+                }
+
+            results.append({
+                "code": code,
+                "name": _stock_names.get(code, ""),
+                "periods": period_stats,
+            })
+        except Exception as e:
+            results.append({
+                "code": code,
+                "name": _stock_names.get(code, ""),
+                "error": str(e),
+                "periods": {},
+            })
+
+    return jsonify(results)
+
+
 if __name__ == "__main__":
     build_stock_names()
     build_stock_index()
