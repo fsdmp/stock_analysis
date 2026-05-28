@@ -932,15 +932,23 @@ def _score_momentum(cols, n, trend):
         else:
             break
     if streak >= 5:
-        score -= 3
-        details.append(f"连阳{streak}日(追高风险极大)")
+        if trend >= 1:
+            score += 1
+            details.append(f"连阳{streak}日(主升浪延续)")
+        else:
+            score -= 3
+            details.append(f"连阳{streak}日(追高风险极大)")
     elif streak >= 4:
-        score -= 2 if trend >= 1 else 0
-        details.append(f"连阳{streak}日(连涨偏高)")
+        if trend >= 1:
+            score += 1
+            details.append(f"连阳{streak}日(趋势延续)")
+        else:
+            score -= 2
+            details.append(f"连阳{streak}日(连涨偏高)")
     elif streak == 3:
         if trend >= 1:
-            score -= 1
-            details.append("连阳3日(注意获利盘)")
+            score += 2
+            details.append("连阳3日(趋势确认)")
         else:
             score += 1
             details.append("连阳3日(反弹)")
@@ -981,19 +989,22 @@ def _score_momentum(cols, n, trend):
             score -= 1
             details.append(f"连阴{abs(streak)}日(偏弱)")
 
-    # 3-day cumulative (trend-contextualized: penalize chasing, reward pullbacks)
+    # 3-day cumulative (trend-contextualized: reward strong momentum in uptrend)
     if n >= 4 and close[n - 4] > 0:
         c3 = (close[n - 1] / close[n - 4] - 1) * 100
-        if trend >= 1:  # Uptrend: reward sustained momentum, penalize chasing
-            if c3 > 15:
-                score -= 5
-                details.append(f"3日涨{c3:+.1f}%(极度过热)")
-            elif c3 > 10:
-                score -= 3
-                details.append(f"3日涨{c3:+.1f}%(严重过热)")
-            elif c3 > 7:
+        if trend >= 1:  # Uptrend: strong momentum is bullish
+            if c3 > 20:
+                score -= 2
+                details.append(f"3日涨{c3:+.1f}%(短期过热)")
+            elif c3 > 15:
                 score += 1
-                details.append(f"3日涨{c3:+.1f}%(偏高)")
+                details.append(f"3日涨{c3:+.1f}%(强势但偏高)")
+            elif c3 > 10:
+                score += 3
+                details.append(f"3日涨{c3:+.1f}%(主升浪动量)")
+            elif c3 > 5:
+                score += 4
+                details.append(f"3日涨{c3:+.1f}%(强动量)")
             elif c3 > 3:
                 score += 3
                 details.append(f"3日涨{c3:+.1f}%(健康动量)")
@@ -1048,18 +1059,17 @@ def _score_momentum(cols, n, trend):
         low10 = min(close[n - 11:n])
         if low10 > 0:
             dist_from_low = (cp - low10) / low10 * 100
-            if trend >= 1:  # uptrend
+            if trend >= 1:  # uptrend - being far from low is normal trend extension
                 if dist_from_low < 3:
                     score += 2
                     details.append("贴近10日低点(安全边际高)")
                 elif dist_from_low < 7:
                     score += 1
                 elif dist_from_low > 15:
-                    score -= 2
-                    details.append(f"远离10日低点{dist_from_low:.0f}%(追高风险)")
+                    # Don't penalize - strong uptrend
+                    details.append(f"远离10日低点{dist_from_low:.0f}%(趋势延伸)")
                 elif dist_from_low > 10:
-                    score -= 1
-                    details.append("偏离10日低点较远")
+                    details.append("偏离10日低点(趋势向上)")
 
     # Today's initiative (first-day move vs continuation)
     if n >= 3:
@@ -1068,18 +1078,30 @@ def _score_momentum(cols, n, trend):
             score += 2
             details.append("启动日(首日上攻)")
         elif tp > 2 and yesterday_pct > 3:
-            score -= 1
-            details.append("连续加速(获利盘压力)")
+            if trend < 1:
+                score -= 1
+                details.append("连续加速(获利盘压力)")
+            else:
+                details.append("连续加速(趋势加速)")
 
-    # 5-day cumulative (penalize overextension even in uptrend)
+    # 5-day cumulative (reward sustained momentum in uptrend)
     if n >= 6 and close[n - 6] > 0:
         c5 = (close[n - 1] / close[n - 6] - 1) * 100
-        if c5 > 15:
-            score -= 2
-            details.append(f"5日涨幅{c5:+.1f}%(偏高超买)")
-        elif c5 > 10 and trend >= 1:
-            score -= 1
-            details.append(f"5日涨{c5:+.1f}%(偏高)")
+        if trend >= 1:
+            # 上升趋势中5日涨幅大是正常的趋势延伸
+            if c5 > 20:
+                score -= 1
+                details.append(f"5日涨幅{c5:+.1f}%(短期偏高)")
+            elif c5 > 10:
+                score += 1
+                details.append(f"5日涨{c5:+.1f}%(强趋势)")
+        else:
+            if c5 > 15:
+                score -= 2
+                details.append(f"5日涨幅{c5:+.1f}%(偏高超买)")
+            elif c5 > 10:
+                score -= 1
+                details.append(f"5日涨{c5:+.1f}%(偏高)")
         if c5 < -15:
             if trend >= 1:
                 score += 3
@@ -1582,27 +1604,42 @@ def _score_price_position(cols, n, trend):
         if h10 > l10:
             pos_10d = (cp - l10) / (h10 - l10) * 100
 
-            if pos_10d >= 99:
-                # 就在10日最高点 → 极度追高
-                score -= 7
-                details.append(f"触及10日高点({pos_10d:.0f}%,极度追高)")
-            elif pos_10d > 95:
-                # 几乎在10日最高点 → 追高风险极大
-                score -= 4
-                details.append(f"贴近10日高点({pos_10d:.0f}%,追高风险)")
-            elif pos_10d > 90:
-                score -= 2
-                details.append(f"接近10日高点({pos_10d:.0f}%)")
-            elif pos_10d > 85:
-                score -= 1
-            elif 60 <= pos_10d <= 85:
-                # 最佳区间: 有上涨空间且不在低位
-                score += 3
-                details.append(f"10日区间适中({pos_10d:.0f}%)")
-            elif 40 <= pos_10d < 60:
-                score += 1
-                details.append(f"10日区间偏低({pos_10d:.0f}%)")
-            # < 40%: 过低, 可能趋势偏弱, 不加分
+            if trend >= 1:
+                # 上升趋势中：高位是正常的趋势延伸，不应过度惩罚
+                if pos_10d >= 99:
+                    score -= 2
+                    details.append(f"触及10日高点({pos_10d:.0f}%)")
+                elif pos_10d > 95:
+                    score -= 1
+                    details.append(f"贴近10日高点({pos_10d:.0f}%)")
+                elif pos_10d > 85:
+                    score += 1
+                    details.append(f"10日区间偏上({pos_10d:.0f}%)")
+                elif 60 <= pos_10d <= 85:
+                    score += 3
+                    details.append(f"10日区间适中({pos_10d:.0f}%)")
+                elif 40 <= pos_10d < 60:
+                    score += 2
+                    details.append(f"10日区间偏低({pos_10d:.0f}%)")
+            else:
+                # 非上升趋势：高位确实代表追高风险
+                if pos_10d >= 99:
+                    score -= 7
+                    details.append(f"触及10日高点({pos_10d:.0f}%,极度追高)")
+                elif pos_10d > 95:
+                    score -= 4
+                    details.append(f"贴近10日高点({pos_10d:.0f}%,追高风险)")
+                elif pos_10d > 90:
+                    score -= 2
+                    details.append(f"接近10日高点({pos_10d:.0f}%)")
+                elif pos_10d > 85:
+                    score -= 1
+                elif 60 <= pos_10d <= 85:
+                    score += 3
+                    details.append(f"10日区间适中({pos_10d:.0f}%)")
+                elif 40 <= pos_10d < 60:
+                    score += 1
+                    details.append(f"10日区间偏低({pos_10d:.0f}%)")
 
     # ── 2. 距5日高点距离 (区分度 0.99) ───────────────────────────
     if n >= 6:
@@ -1611,22 +1648,34 @@ def _score_price_position(cols, n, trend):
         if h5 > 0:
             dist_high_5d = (cp - h5) / h5 * 100
 
-            if dist_high_5d > -0.5:
-                # 几乎就是5日最高点 → 追高
-                score -= 3
-                details.append(f"紧贴5日高点(距高点{dist_high_5d:+.1f}%)")
-            elif dist_high_5d > -1.5:
-                score -= 1
-            elif -5 <= dist_high_5d <= -2:
-                # 距高点2%~5%的回调 → 最佳买点区间
-                score += 3
-                details.append(f"距5日高点{dist_high_5d:+.1f}%(适度回调)")
-            elif -8 < dist_high_5d < -5:
-                score += 1
-                details.append(f"距5日高点{dist_high_5d:+.1f}%")
-            elif dist_high_5d <= -8:
-                # 回调过深
-                score -= 1
+            if trend >= 1:
+                # 上升趋势中：紧贴高点是正常的趋势延伸
+                if dist_high_5d > -0.5:
+                    score += 1
+                    details.append(f"创5日新高(上升趋势中)")
+                elif -3 <= dist_high_5d <= -1:
+                    score += 3
+                    details.append(f"距5日高点{dist_high_5d:+.1f}%(上升回调)")
+                elif -6 <= dist_high_5d < -3:
+                    score += 2
+                    details.append(f"距5日高点{dist_high_5d:+.1f}%(回调买点)")
+                elif dist_high_5d < -6:
+                    score -= 1
+            else:
+                # 非上升趋势
+                if dist_high_5d > -0.5:
+                    score -= 3
+                    details.append(f"紧贴5日高点(距高点{dist_high_5d:+.1f}%)")
+                elif dist_high_5d > -1.5:
+                    score -= 1
+                elif -5 <= dist_high_5d <= -2:
+                    score += 3
+                    details.append(f"距5日高点{dist_high_5d:+.1f}%(适度回调)")
+                elif -8 < dist_high_5d < -5:
+                    score += 1
+                    details.append(f"距5日高点{dist_high_5d:+.1f}%")
+                elif dist_high_5d <= -8:
+                    score -= 1
 
     # ── 3. 5日振幅活跃度 (区分度 0.70) ───────────────────────────
     if n >= 6:
@@ -1733,16 +1782,17 @@ def calc_score(df: pd.DataFrame) -> dict:
         if _recent_limit_up_count(cols, n) == 0:
             normalized = min(normalized, 72)
 
-    # 过热降温：大涨+远离MA20 = 追高风险极高
-    if _v(pct_today) and pct_today > 0:
+    # 过热降温：仅在非上升趋势 + 大涨+远离MA20时降温
+    # 上升趋势中的上涨偏离是正常的趋势延伸，不应惩罚
+    if _v(pct_today) and pct_today > 0 and trend < 1:
         ma20_val = _safe(cols, n - 1, "ma20")
         cp = cols["close"][n - 1]
         if _v(ma20_val) and ma20_val > 0:
             dev_ma20 = (cp - ma20_val) / ma20_val * 100
-            if pct_today > 3 and dev_ma20 > 5:
-                normalized = min(normalized, 65)
-            elif pct_today > 3 and dev_ma20 > 3:
-                normalized = min(normalized, 72)
+            if pct_today > 5 and dev_ma20 > 8:
+                normalized = min(normalized, 68)
+            elif pct_today > 3 and dev_ma20 > 5:
+                normalized = min(normalized, 75)
 
     action, hold_advice, summary = _make_advice(normalized, dim_scores, trend)
 

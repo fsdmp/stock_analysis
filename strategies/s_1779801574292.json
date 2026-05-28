@@ -46,11 +46,6 @@
         "value": false
       },
       {
-        "field": "ma5",
-        "lookback": 5,
-        "op": "rising"
-      },
-      {
         "field": "is_st",
         "op": "=",
         "value": false
@@ -76,6 +71,11 @@
         "field": "pct_change",
         "op": "<",
         "value": 8
+      },
+      {
+        "field": "ma5_dist",
+        "op": "<",
+        "value": 7
       }
     ]
   }

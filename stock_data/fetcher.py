@@ -1,5 +1,6 @@
-"""Main fetcher: download A-share main board stock data with technical indicators.
+"""Main fetcher: download A-share stock data with technical indicators.
 
+Supports: 主板 (沪市60xxxx / 深市00xxxx), 创业板 (300xxx), 科创板 (688xxx)
 Primary data source: baostock (stable, free, no rate limit issues)
 Fallback: akshare (eastmoney)
 """
@@ -29,12 +30,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_mainboard_stocks() -> pd.DataFrame:
-    """Fetch all A-share main board stock codes from baostock.
+def get_all_stocks() -> pd.DataFrame:
+    """Fetch all A-share stock codes from baostock.
 
+    Supports: 主板 (沪市60xxxx / 深市00xxxx), 创业板 (300xxx), 科创板 (688xxx)
     Returns DataFrame with columns: code, name, market (sh/sz)
     """
-    logger.info("Fetching main board stock list...")
+    logger.info("Fetching stock list (主板 + 创业板 + 科创板)...")
 
     rows, rs = bs_query_iter(bs.query_stock_basic, code_name="")
     if rs.error_code != "0":
@@ -51,10 +53,19 @@ def get_mainboard_stocks() -> pd.DataFrame:
             results.append({"code": pure_code, "name": name, "market": market})
         elif pure_code.startswith("00") and market == "sz":
             results.append({"code": pure_code, "name": name, "market": market})
+        elif pure_code.startswith("300") and market == "sz":
+            # 创业板 (ChiNext)
+            results.append({"code": pure_code, "name": name, "market": market})
+        elif pure_code.startswith("301") and market == "sz":
+            # 创业板 (ChiNext, 301xxx)
+            results.append({"code": pure_code, "name": name, "market": market})
+        elif pure_code.startswith("688") and market == "sh":
+            # 科创板 (STAR Market)
+            results.append({"code": pure_code, "name": name, "market": market})
 
     df = pd.DataFrame(results)
     df = df.drop_duplicates(subset=["code"]).reset_index(drop=True)
-    logger.info(f"Found {len(df)} main board stocks")
+    logger.info(f"Found {len(df)} stocks (主板 + 创业板 + 科创板)")
     return df
 
 
@@ -228,7 +239,7 @@ def fetch_all(stocks_df: pd.DataFrame, start_date: str = START_DATE,
 
 
 if __name__ == "__main__":
-    stocks = get_mainboard_stocks()
+    stocks = get_all_stocks()
 
     start = sys.argv[1] if len(sys.argv) > 1 else START_DATE
     end = sys.argv[2] if len(sys.argv) > 2 else END_DATE

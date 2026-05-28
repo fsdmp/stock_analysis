@@ -441,6 +441,7 @@ const PRESETS = {
     { id: "vol_ratio", label: "量比", type: "cmp_val", field: "vol_ratio" },
     { id: "volume", label: "成交量", type: "cmp_val", field: "volume" },
     { id: "amount", label: "成交额", type: "cmp_val", field: "amount" },
+    { id: "ma5_dist", label: "距5日线距离(%)", type: "cmp_val", field: "ma5_dist" },
   ],
   "均线系统": [
     { id: "ma_bull", label: "多头排列", type: "ma_align", value: "多头排列" },
@@ -505,6 +506,9 @@ const PRESETS = {
     { id: "pct_sum", label: "N日累计涨跌幅", type: "lb_cmp", field: "pct_change_sum", defLb: 5 },
     { id: "turn_avg", label: "N日平均换手率", type: "lb_cmp", field: "turnover_avg", defLb: 5 },
     { id: "amt_avg", label: "N日平均成交额", type: "lb_cmp", field: "amount_avg", defLb: 5 },
+    { id: "low_drop_max", label: "N日最大低点跌幅(%)", type: "lb_cmp", field: "low_drop_max", defLb: 5 },
+    { id: "red_bar_ratio", label: "N日阳线占比(%)", type: "lb_cmp", field: "red_bar_ratio", defLb: 10 },
+    { id: "close_drop", label: "N日最大单日收盘跌幅(%)", type: "lb_cmp", field: "close_drop", defLb: 5 },
   ],
 };
 
@@ -1110,7 +1114,7 @@ function renderCondRow(c, i) {
       <span class="param-label">天</span></div>${del}</div>`;
   }
   if (cond.lookback !== undefined && cond.value !== undefined && typeof cond.value === 'number') {
-    const fieldLabels = {limit_up_count:'涨停次数',limit_down_count:'跌停次数',pct_change_sum:'累计涨跌幅',turnover_avg:'平均换手率',amount_avg:'平均成交额',vol_ratio_avg:'平均量比'};
+    const fieldLabels = {limit_up_count:'涨停次数',limit_down_count:'跌停次数',pct_change_sum:'累计涨跌幅',turnover_avg:'平均换手率',amount_avg:'平均成交额',vol_ratio_avg:'平均量比',low_drop_max:'最大低点跌幅',red_bar_ratio:'阳线占比',close_drop:'最大单日收盘跌幅'};
     const label = fieldLabels[cond.field] || cond.field;
     const ops = CMP_OPS.map(o=>`<option value="${o.v}"${cond.op===o.v?' selected':''}>${o.l}</option>`).join('');
     return `<div class="cond-item"><span class="cond-text">最近</span>
@@ -1130,7 +1134,7 @@ function renderCondRow(c, i) {
       <div class="param-group"><select class="param-sm" onchange="updCond(${i},'ref',this.value)" style="width:72px">${refs}</select></div>${del}</div>`;
   }
   if (cond.value !== undefined && typeof cond.value === 'number') {
-    const fieldLabels = {pct_change:'涨跌幅(%)',close:'收盘价',turnover:'换手率(%)',vol_ratio:'量比',volume:'成交量',amount:'成交额',continuous_up:'连涨天数',continuous_down:'连跌天数',continuous_limit_up:'连续涨停',continuous_limit_down:'连续跌停'};
+    const fieldLabels = {pct_change:'涨跌幅(%)',close:'收盘价',turnover:'换手率(%)',vol_ratio:'量比',volume:'成交量',amount:'成交额',continuous_up:'连涨天数',continuous_down:'连跌天数',continuous_limit_up:'连续涨停',continuous_limit_down:'连续跌停',ma5_dist:'距5日线距离(%)'};
     const label = fieldLabels[cond.field] || cond.field;
     const ops = CMP_OPS.map(o=>`<option value="${o.v}"${cond.op===o.v?' selected':''}>${o.l}</option>`).join('');
     return `<div class="cond-item"><span class="cond-text">${label}</span>
@@ -1256,13 +1260,16 @@ function condToText(rule) {
   const fieldLabels = {
     pct_change: '涨跌幅', close: '收盘价', turnover: '换手率', vol_ratio: '量比',
     volume: '成交量', amount: '成交额', continuous_up: '连涨', continuous_down: '连跌',
-    continuous_limit_up: '连续涨停', continuous_limit_down: '连续跌停',
+    continuous_limit_up: '连续涨停', continuous_limit_down: '连续跌停', ma5_dist: '距5日线距离(%)',
   };
   if (f === 'limit_up_count') return `最近${lb}天涨停次数 ${op} ${v}`;
   if (f === 'limit_down_count') return `最近${lb}天跌停次数 ${op} ${v}`;
   if (f === 'pct_change_sum') return `最近${lb}天累计涨跌幅 ${op} ${v}`;
   if (f === 'turnover_avg') return `最近${lb}天平均换手率 ${op} ${v}`;
   if (f === 'amount_avg') return `最近${lb}天平均成交额 ${op} ${v}`;
+  if (f === 'low_drop_max') return `最近${lb}天最大低点跌幅 ${op} ${v}%`;
+  if (f === 'red_bar_ratio') return `最近${lb}天阳线占比 ${op} ${v}%`;
+  if (f === 'close_drop') return `最近${lb}天最大单日收盘跌幅 ${op} ${v}%`;
   if (ref) return `${fieldLabels[f]||f} ${op} ${ref.toUpperCase()}`;
 
   return `${fieldLabels[f]||f} ${op} ${v}`;

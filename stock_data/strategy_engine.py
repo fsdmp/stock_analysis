@@ -32,7 +32,8 @@ _META_FIELDS = {
     "continuous_up", "continuous_down",
     "pct_change_sum", "turnover_avg", "amount_avg",
     "high_max", "low_min", "amplitude_max", "vol_ratio_avg",
-    "kline", "vol_price", "ma_align",
+    "low_drop_max", "red_bar_ratio", "close_drop",
+    "kline", "vol_price", "ma_align", "ma5_dist",
 }
 
 # Base columns always needed for derived field computation
@@ -207,10 +208,12 @@ def _resolve_field(
         return "交易" if vol is not None and vol > 0 else "停牌"
     if field == "is_limit_up":
         v = _safe(df, idx, "pct_change")
-        return v is not None and v >= 9.5
+        threshold = _limit_threshold(code)
+        return v is not None and v >= threshold
     if field == "is_limit_down":
         v = _safe(df, idx, "pct_change")
-        return v is not None and v <= -9.5
+        threshold = _limit_threshold(code)
+        return v is not None and v <= -threshold
 
     # --- Aggregate lookback fields ---
     if lookback and aggregate:
@@ -221,26 +224,30 @@ def _resolve_field(
         lb = lookback or 10
         start = max(0, idx - lb + 1)
         vals = df["pct_change"].iloc[start:idx + 1]
-        return int((vals >= 9.5).sum())
+        threshold = _limit_threshold(code)
+        return int((vals >= threshold).sum())
     if field == "limit_down_count":
         lb = lookback or 10
         start = max(0, idx - lb + 1)
         vals = df["pct_change"].iloc[start:idx + 1]
-        return int((vals <= -9.5).sum())
+        threshold = _limit_threshold(code)
+        return int((vals <= -threshold).sum())
     if field == "continuous_limit_up":
         count = 0
+        threshold = _limit_threshold(code)
         for i in range(idx, -1, -1):
             v = _safe(df, i, "pct_change")
-            if v is not None and v >= 9.5:
+            if v is not None and v >= threshold:
                 count += 1
             else:
                 break
         return count
     if field == "continuous_limit_down":
         count = 0
+        threshold = _limit_threshold(code)
         for i in range(idx, -1, -1):
             v = _safe(df, i, "pct_change")
-            if v is not None and v <= -9.5:
+            if v is not None and v <= -threshold:
                 count += 1
             else:
                 break
@@ -307,6 +314,56 @@ def _resolve_field(
         start = max(0, idx - lb + 1)
         vals = df["vol_ratio"].iloc[start:idx + 1].dropna()
         return float(vals.mean()) if len(vals) > 0 else None
+    if field == "low_drop_max":
+        lb = lookback or 10
+        start = max(0, idx - lb + 1)
+        if start < 1:
+            start = 1
+        max_drop = None
+        for i in range(start, idx + 1):
+            prev_close = _safe(df, i - 1, "close")
+            cur_low = _safe(df, i, "low")
+            if prev_close is None or cur_low is None or prev_close == 0:
+                continue
+            drop_pct = abs(cur_low - prev_close) / prev_close * 100
+            if max_drop is None or drop_pct > max_drop:
+                max_drop = drop_pct
+        return max_drop
+    if field == "red_bar_ratio":
+        lb = lookback or 10
+        start = max(0, idx - lb + 1)
+        opens = df["open"].iloc[start:idx + 1]
+        closes = df["close"].iloc[start:idx + 1]
+        valid = ~(opens.isna() | closes.isna())
+        total = int(valid.sum())
+        if total == 0:
+            return None
+        red_count = int((closes[valid] > opens[valid]).sum())
+        return round(red_count / total * 100, 2)
+
+    if field == "close_drop":
+        lb = lookback or 10
+        start = max(0, idx - lb + 1)
+        if start < 1:
+            start = 1
+        max_drop = None
+        for i in range(start, idx + 1):
+            prev_close = _safe(df, i - 1, "close")
+            cur_close = _safe(df, i, "close")
+            if prev_close is None or cur_close is None or prev_close == 0:
+                continue
+            drop_pct = (cur_close - prev_close) / prev_close * 100
+            if max_drop is None or drop_pct < max_drop:
+                max_drop = drop_pct
+        return max_drop
+
+    # --- Distance to MA (percentage) ---
+    if field == "ma5_dist":
+        close = _safe(df, idx, "close")
+        ma5 = _safe(df, idx, "ma5")
+        if close is None or ma5 is None or ma5 == 0:
+            return None
+        return round((close - ma5) / ma5 * 100, 2)
 
     # --- Direct DataFrame column ---
     if field in _DF_COLUMNS:
@@ -330,6 +387,18 @@ def _resolve_aggregate(field: str, df: pd.DataFrame, idx: int, lookback: int, ag
     if aggregate == "min":
         return float(series.min())
     return None
+
+
+def _limit_threshold(code: str) -> float:
+    """Return the limit-up/down threshold based on stock board type.
+
+    主板: 9.5% (limit is 10%, use 9.5 to account for rounding)
+    创业板 (300xxx/301xxx): 19.5% (limit is 20%)
+    科创板 (688xxx): 19.5% (limit is 20%)
+    """
+    if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+        return 19.5
+    return 9.5
 
 
 def _safe(df: pd.DataFrame, idx: int, col: str):
@@ -603,3 +672,4 @@ def _collect_columns(group: dict, cols: set):
                 cols.update(["close", "bb_upper", "bb_lower", "bb_middle"])
             elif "柱" in zone:
                 cols.add("macd_hist")
+

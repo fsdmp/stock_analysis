@@ -123,8 +123,8 @@ def build_stock_names(use_cache=True):
     
     # Fallback: fetch from baostock
     try:
-        from stock_data.fetcher import get_mainboard_stocks
-        df = get_mainboard_stocks()
+        from stock_data.fetcher import get_all_stocks
+        df = get_all_stocks()
         _stock_names = dict(zip(df["code"], df["name"]))
         # Save to cache for next startup
         with open(STOCK_NAMES_CACHE, "w", encoding="utf-8") as f:

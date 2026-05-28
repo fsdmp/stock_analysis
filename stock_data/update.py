@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from stock_data.config import DATA_DIR, REQUEST_INTERVAL, BATCH_WORKERS
 from stock_data.fetcher import (
-    get_mainboard_stocks, fetch_stock_history, standardize,
+    get_all_stocks, fetch_stock_history, standardize,
     add_all_indicators, get_output_path, fetch_all,
 )
 from stock_data.bs_manager import BSSession
@@ -130,9 +130,9 @@ def update_all(codes: list[str] | None = None, progress_cb=None,
 
 
 def fetch_new_listings() -> pd.DataFrame:
-    """Check for any new main board stocks not yet in data directory,
+    """Check for any new stocks not yet in data directory,
     and fetch their full history."""
-    all_stocks = get_mainboard_stocks()
+    all_stocks = get_all_stocks()
     existing_codes = {f.stem for f in DATA_DIR.glob("*.parquet")}
     new_stocks = all_stocks[~all_stocks["code"].isin(existing_codes)]
 
