@@ -79,6 +79,7 @@ def _ensure_login():
 
 def _force_relogin():
     """Force logout + login. Must be called while holding _bs_lock."""
+    import time as _time
     global _bs_logged_in
     try:
         _silent_logout()
@@ -86,6 +87,7 @@ def _force_relogin():
         pass
     _bs_logged_in = False
     _ensure_login()
+    _time.sleep(0.5)  # Avoid baostock race condition after re-login
 
 
 def _is_network_error(rs) -> bool:
