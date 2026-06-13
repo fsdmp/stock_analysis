@@ -1,0 +1,16 @@
+{
+  "name": "测试",
+  "description": "",
+  "version": "2.0",
+  "tags": [],
+  "filter": {
+    "logic": "AND",
+    "rules": [
+      {
+        "field": "macd_hist",
+        "op": "in_zone",
+        "value": "红柱"
+      }
+    ]
+  }
+}

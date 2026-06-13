@@ -646,6 +646,10 @@ function renderTable(periods) {
           html += '<td style="color:#555;">--</td>';
         } else if (m.color === 'pct') {
           html += `<td>${colorVal(v, 'pct')}</td>`;
+        } else if (m.unit === '%') {
+          html += `<td>${Number(v).toFixed(2)}%</td>`;
+        } else if (typeof v === 'number') {
+          html += `<td>${m.unit ? v + m.unit : v.toFixed(2)}</td>`;
         } else {
           html += `<td>${v}</td>`;
         }
@@ -699,7 +703,7 @@ function renderCharts(periods) {
   // Chart 2: Risk metrics (max gain vs max drawdown)
   const riskChart = echarts.init(document.getElementById('riskChart'));
   const riskSeriesUp = stocks.map((s, i) => ({
-    name: `${s.code} 最大涨幅`,
+    name: `${s.name || ''}(${s.code}) 最大涨幅`,
     type: 'bar',
     stack: s.code,
     data: periods.map(p => {
@@ -709,7 +713,7 @@ function renderCharts(periods) {
     itemStyle: { color: STOCK_COLORS[i % STOCK_COLORS.length], opacity: 0.8 },
   }));
   const riskSeriesDown = stocks.map((s, i) => ({
-    name: `${s.code} 最大回撤`,
+    name: `${s.name || ''}(${s.code}) 最大回撤`,
     type: 'bar',
     stack: s.code + '_dd',
     data: periods.map(p => {

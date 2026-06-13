@@ -2072,7 +2072,7 @@ def api_compare():
                     period_stats[label] = {"error": "数据不足"}
                     continue
 
-                start_price = float(sub.iloc[0]["open"])
+                start_price = float(sub.iloc[0]["close"])
                 end_price = float(sub.iloc[-1]["close"])
                 highest = float(sub["high"].max())
                 lowest = float(sub["low"].min())
