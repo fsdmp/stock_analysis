@@ -61,6 +61,36 @@ class BSSession:
             pass
 
 
+# === Per-worker-process session (for ProcessPoolExecutor tasks) ===
+
+_worker_session = None
+
+
+def worker_login():
+    """ProcessPoolExecutor initializer: log in once per worker process.
+
+    baostock login is dominated by a ~6-8s server-side delay on every call
+    (the TCP handshake is ~25ms; the wait is the server processing the login).
+    Logging in once per process instead of once per task is what makes batch
+    fetch/update of thousands of stocks tractable.
+    """
+    global _worker_session
+    _worker_session = BSSession()
+    _worker_session.__enter__()
+    import atexit
+    atexit.register(_worker_logout)
+
+
+def _worker_logout():
+    global _worker_session
+    if _worker_session is not None:
+        try:
+            _worker_session.__exit__(None, None, None)
+        except Exception:
+            pass
+        _worker_session = None
+
+
 # === Shared process-level session (for web server main process) ===
 
 _bs_lock = threading.Lock()

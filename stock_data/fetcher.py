@@ -20,7 +20,7 @@ from stock_data.config import (
     REQUEST_INTERVAL, BATCH_WORKERS,
 )
 from stock_data.indicators import add_all_indicators
-from stock_data.bs_manager import BSSession, bs_query_iter, _silent_login, _silent_logout
+from stock_data.bs_manager import bs_query_iter, _silent_login, _silent_logout, worker_login
 
 logging.basicConfig(
     level=logging.INFO,
@@ -164,26 +164,29 @@ def save_stock(df: pd.DataFrame, code: str) -> None:
 
 def _fetch_and_save_worker(code: str, name: str, start_date: str, end_date: str,
                            skip_existing: bool) -> dict:
-    """Worker function for ProcessPoolExecutor. Each call runs in its own process."""
-    with BSSession():
-        path = get_output_path(code)
+    """Worker function for ProcessPoolExecutor.
 
-        if skip_existing and path.exists():
-            existing = pd.read_parquet(path)
-            last_date = existing["date"].max()
-            if pd.Timestamp(end_date) <= last_date:
-                return {"code": code, "name": name, "status": "skipped", "rows": len(existing)}
+    The baostock session is opened once per worker process by the pool
+    initializer (worker_login); do NOT open a session per task.
+    """
+    path = get_output_path(code)
 
-        raw = fetch_stock_history(code, start_date, end_date)
-        if raw is None or raw.empty:
-            return {"code": code, "name": name, "status": "no_data", "rows": 0}
+    if skip_existing and path.exists():
+        existing = pd.read_parquet(path)
+        last_date = existing["date"].max()
+        if pd.Timestamp(end_date) <= last_date:
+            return {"code": code, "name": name, "status": "skipped", "rows": len(existing)}
 
-        df = standardize(raw, code)
-        df = add_all_indicators(df)
-        save_stock(df, code)
-        time.sleep(REQUEST_INTERVAL)
+    raw = fetch_stock_history(code, start_date, end_date)
+    if raw is None or raw.empty:
+        return {"code": code, "name": name, "status": "no_data", "rows": 0}
 
-        return {"code": code, "name": name, "status": "ok", "rows": len(df)}
+    df = standardize(raw, code)
+    df = add_all_indicators(df)
+    save_stock(df, code)
+    time.sleep(REQUEST_INTERVAL)
+
+    return {"code": code, "name": name, "status": "ok", "rows": len(df)}
 
 
 def fetch_all(stocks_df: pd.DataFrame, start_date: str = START_DATE,
@@ -205,7 +208,7 @@ def fetch_all(stocks_df: pd.DataFrame, start_date: str = START_DATE,
     total = len(stocks_df)
     code_name_map = dict(zip(stocks_df["code"], stocks_df.get("name", [""] * total)))
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+    with ProcessPoolExecutor(max_workers=max_workers, initializer=worker_login) as executor:
         futures = {
             executor.submit(
                 _fetch_and_save_worker, code, code_name_map.get(code, ""),

@@ -15,7 +15,7 @@ from stock_data.fetcher import (
     get_all_stocks, fetch_stock_history, standardize,
     add_all_indicators, get_output_path, fetch_all,
 )
-from stock_data.bs_manager import BSSession
+from stock_data.bs_manager import worker_login
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,9 +76,13 @@ def update_stock(code: str, end_date: str | None = None) -> dict:
 
 
 def _update_stock_worker(code: str, end_date: str) -> dict:
-    """Worker function for ProcessPoolExecutor."""
-    with BSSession():
-        return update_stock(code, end_date)
+    """Worker function for ProcessPoolExecutor.
+
+    The baostock session is opened once per worker process by the pool
+    initializer (worker_login); do NOT open a session per task — each
+    login costs ~6-8s of server-side delay.
+    """
+    return update_stock(code, end_date)
 
 
 def update_all(codes: list[str] | None = None, progress_cb=None,
@@ -102,7 +106,7 @@ def update_all(codes: list[str] | None = None, progress_cb=None,
     logger.info(f"Updating {len(codes)} stocks (end_date={end_date})...")
     results = []
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+    with ProcessPoolExecutor(max_workers=max_workers, initializer=worker_login) as executor:
         futures = {
             executor.submit(_update_stock_worker, code, end_date): code
             for code in codes
